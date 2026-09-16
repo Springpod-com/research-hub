@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ClerkProvider, SignIn, useAuth, UserButton } from "@clerk/react";
+import { publishableKeyFromHost } from "@clerk/react/internal";
 import { App } from "./App";
 import { api } from "./api";
 import {
@@ -73,9 +74,23 @@ function Root() {
   if (config.preview) return <App preview />;
   if (!config.configured)
     return <Setup title="Connect your team’s Clerk workspace" />;
+  // Replit-managed Clerk: the key is resolved from the current hostname (custom
+  // domains map to their own key) and, in production, Clerk's Frontend API is
+  // reached through this origin's /api/__clerk proxy. Both are empty in
+  // development, where Clerk's development instance is used directly.
+  const publishableKey = publishableKeyFromHost(
+    window.location.hostname,
+    config.clerkPublishableKey,
+  );
+  const proxyUrl =
+    import.meta.env.VITE_CLERK_PROXY_URL ||
+    (config.clerkProxyPath
+      ? `${window.location.origin}${config.clerkProxyPath}`
+      : undefined);
   return (
     <ClerkProvider
-      publishableKey={config.clerkPublishableKey}
+      publishableKey={publishableKey}
+      proxyUrl={proxyUrl}
       afterSignOutUrl="/"
     >
       <Authenticated />

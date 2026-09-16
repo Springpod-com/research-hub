@@ -119,6 +119,11 @@ export function extractPage(html: string, url: string) {
       }
     });
   $("script,style,nav,footer,header,noscript,svg,form").remove();
+  // Block elements are separated so adjacent paragraphs and headings do not
+  // run together once whitespace is collapsed.
+  $("p,li,h1,h2,h3,h4,h5,h6,div,section,article,tr,td,th,blockquote,br").after(
+    " ",
+  );
   const text = $("main").length ? $("main").text() : $("body").text();
   return {
     title,

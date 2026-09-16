@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import type {
   Workspace,
@@ -7,6 +7,10 @@ import type {
   Member,
   Source,
   Citation,
+  Finding,
+  Organisation,
+  Role,
+  ReviewState,
 } from "../shared/types.js";
 export class HttpError extends Error {
   constructor(
@@ -93,13 +97,16 @@ export const occupationInput = z
     code: text.max(30),
     title: text.max(200),
     sourceUrl: z.string().url(),
-    datasetVersion: text.max(100),
+    datasetVersion: text.max(200),
     rationale: text,
     status: z.enum(["proposed", "confirmed"]).default("proposed"),
     activities: z.array(text).max(30).default([]),
     skills: z.array(text).max(30).default([]),
     knowledge: z.array(text).max(30).default([]),
     workContext: z.array(text).max(30).default([]),
+    basis: z.enum(["manual", "dataset-search"]).default("manual"),
+    jurisdiction: z.enum(["UK", "US"]).optional(),
+    retrievedAt: z.string().datetime().optional(),
   })
   .refine(
     (o) =>
@@ -108,6 +115,57 @@ export const occupationInput = z
         : /^\d{2}-\d{4}\.\d{2}$/.test(o.code),
     "Use the dataset’s exact occupation code",
   );
+export type OccupationInput = z.infer<typeof occupationInput>;
+/**
+ * A dataset-search match must describe the dataset entry it names: identity
+ * fields come from the bundled dataset, statements must be the dataset's own,
+ * and it is always recorded as proposed for a human to confirm.
+ */
+export function hydrateDatasetMatch(
+  data: OccupationInput,
+  found: {
+    dataset: {
+      version: string;
+      jurisdiction: "UK" | "US";
+      retrievedAt: string;
+    };
+    sourceUrl: string;
+    entry: {
+      title: string;
+      tasks: string[];
+      activities: string[];
+      skills: string[];
+      knowledge: string[];
+      workContext: string[];
+    };
+  },
+): OccupationInput {
+  const { entry } = found;
+  const allowed: [keyof OccupationInput, string[]][] = [
+    ["activities", [...entry.tasks, ...entry.activities]],
+    ["skills", entry.skills],
+    ["knowledge", entry.knowledge],
+    ["workContext", entry.workContext],
+  ];
+  for (const [field, values] of allowed) {
+    const set = new Set(values);
+    if ((data[field] as string[]).some((v) => !set.has(v)))
+      throw new HttpError(
+        422,
+        `Selected ${String(field)} must be statements from the dataset entry.`,
+      );
+  }
+  return {
+    ...data,
+    title: entry.title,
+    sourceUrl: found.sourceUrl,
+    datasetVersion: found.dataset.version,
+    jurisdiction: found.dataset.jurisdiction,
+    retrievedAt: found.dataset.retrievedAt,
+    status: "proposed",
+    basis: "dataset-search",
+  };
+}
 export function requireRole(member: Member, roles: Member["role"][]) {
   if (!member.active || !roles.includes(member.role))
     throw new HttpError(403, "Your workspace role cannot perform this action.");
@@ -163,6 +221,16 @@ export function validateCitations(
         "Occupational context cannot establish an employer fact.",
       );
   }
+}
+/**
+ * A finding whose cited web page was refreshed and whose exact quotation no
+ * longer appears in the new capture must be looked at again. Reviewing the
+ * finding after the change (accept, exclude or clarify) clears the flag.
+ */
+export function needsRecheck(f: Finding): boolean {
+  return (f.sourceChanges || []).some(
+    (c) => !c.quoteFound && (!f.reviewedAt || f.reviewedAt < c.at),
+  );
 }
 export function readiness(w: Workspace, orgId: string, roleId: string) {
   roleInOrg(w, orgId, roleId);
@@ -224,7 +292,286 @@ export function readiness(w: Workspace, orgId: string, roleId: string) {
     } catch {
       issues.push("Repair the evidence references for an accepted finding.");
     }
+  if (relevant.some((f) => f.review !== "rejected" && needsRecheck(f)))
+    issues.push(
+      "Re-review findings whose source page changed since the quotation was captured.",
+    );
   return [...new Set(issues)];
+}
+/**
+ * Stable digest of everything a reviewer signed off when marking a role
+ * profile ready. Any later change to this content returns the profile to
+ * draft, so a "ready" snapshot can only be created from reviewed content.
+ */
+export function roleFingerprint(w: Workspace, role: Role): string {
+  const org = w.organisations.find((o) => o.id === role.orgId);
+  const pick = <T extends object>(o: T, keys: (keyof T)[]) =>
+    Object.fromEntries(keys.map((k) => [k, o[k]]));
+  const orgKeys: (keyof Organisation)[] = [
+    "name",
+    "website",
+    "country",
+    "division",
+    "summary",
+    "brandNotes",
+    "logoSourceId",
+  ];
+  const findings = w.findings.filter(
+    (f) => f.orgId === role.orgId && (!f.roleId || f.roleId === role.id),
+  );
+  const citedIds = new Set(
+    findings.flatMap((f) => f.citations.map((c) => c.sourceId)),
+  );
+  const content = {
+    role: pick(role, [
+      "title",
+      "location",
+      "seniority",
+      "responsibilities",
+      "boundaries",
+      "occupations",
+    ]),
+    organisation: org ? pick(org, orgKeys) : null,
+    findings: findings.map((f) => ({
+      ...pick(f, ["id", "kind", "claim", "citations", "review", "rationale"]),
+      recheck: needsRecheck(f),
+    })),
+    // The source register a pack would snapshot, keyed by content rather than
+    // id or capture time so an unchanged refresh does not disturb readiness.
+    sources: [
+      ...new Set(
+        w.sources
+          .filter(
+            (s) =>
+              s.orgId === role.orgId &&
+              (citedIds.has(s.id) ||
+                !s.roleIds.length ||
+                s.roleIds.includes(role.id)),
+          )
+          .map((s) =>
+            JSON.stringify(
+              pick(s, [
+                "title",
+                "kind",
+                "url",
+                "text",
+                "locator",
+                "permission",
+                "caption",
+                "roleIds",
+                "verification",
+                "suppliedBy",
+                "publishedAt",
+                "mime",
+                "filename",
+                "error",
+              ]),
+            ),
+          ),
+      ),
+    ].sort(),
+    activities: w.activities
+      .filter((a) => a.roleId === role.id)
+      .map((a) =>
+        pick(a, [
+          "id",
+          "title",
+          "action",
+          "output",
+          "materials",
+          "learning",
+          "confirmation",
+          "findingIds",
+          "review",
+        ]),
+      ),
+    questions: w.questions
+      .filter(
+        (q) => q.orgId === role.orgId && (!q.roleId || q.roleId === role.id),
+      )
+      .map((q) =>
+        pick(q, [
+          "id",
+          "text",
+          "why",
+          "blocking",
+          "status",
+          "answer",
+          "assignee",
+        ]),
+      ),
+    // Research-run errors become pack limitations.
+    jobErrors: w.jobs
+      .filter(
+        (j) => j.orgId === role.orgId && (!j.roleId || j.roleId === role.id),
+      )
+      .flatMap((j) => j.errors)
+      .sort(),
+  };
+  return createHash("sha256").update(JSON.stringify(content)).digest("hex");
+}
+export function reviewStateOf(
+  w: Workspace,
+  role: Role,
+): { state: ReviewState; changed: boolean } {
+  const stored = role.reviewState || "draft";
+  if (stored === "ready" && role.readyFingerprint !== roleFingerprint(w, role))
+    return { state: "draft", changed: true };
+  return { state: stored, changed: false };
+}
+/** Role as returned to clients: effective review state plus change flag. */
+export function roleView(w: Workspace, role: Role): Role {
+  const { state, changed } = reviewStateOf(w, role);
+  return { ...role, reviewState: state, reviewChanged: changed };
+}
+export function setReviewState(
+  w: Workspace,
+  role: Role,
+  member: Member,
+  state: ReviewState,
+  note: string,
+) {
+  const current = reviewStateOf(w, role).state;
+  if (state === "ready") {
+    requireRole(member, ["reviewer", "admin"]);
+    const issues = readiness(w, role.orgId, role.id);
+    if (issues.length) throw new HttpError(422, issues.join(" "));
+    role.readyFingerprint = roleFingerprint(w, role);
+  } else {
+    requireRole(member, ["researcher", "reviewer", "admin"]);
+    delete role.readyFingerprint;
+  }
+  if (current === state && role.reviewState === state)
+    throw new HttpError(
+      409,
+      `The role profile is already ${state.replace("-", " ")}.`,
+    );
+  role.reviewState = state;
+  role.reviewStateBy = member.userId;
+  role.reviewStateAt = now();
+  role.reviewStateNote = note;
+}
+/**
+ * Existing organisations that may be the one a user is about to create.
+ * Compared by website domain and by normalised name (legal suffixes removed),
+ * with the reason for each suggestion made explicit.
+ */
+export function suggestOrganisations(
+  organisations: Organisation[],
+  input: { name: string; website: string },
+) {
+  const host = (u: string) => {
+    try {
+      return new URL(u).hostname.replace(/^www\./, "").toLowerCase();
+    } catch {
+      return "";
+    }
+  };
+  const norm = (n: string) =>
+    n
+      .toLowerCase()
+      .replace(/&/g, " and ")
+      .replace(/[^a-z0-9 ]+/g, " ")
+      .replace(
+        /\b(the|ltd|limited|plc|llp|llc|inc|incorporated|co|company|group|holdings|uk|gmbh|sa|ag)\b/g,
+        " ",
+      )
+      .replace(/\s+/g, " ")
+      .trim();
+  const bigrams = (s: string) => {
+    const t = s.replace(/ /g, "");
+    const out = new Map<string, number>();
+    for (let i = 0; i < t.length - 1; i++) {
+      const g = t.slice(i, i + 2);
+      out.set(g, (out.get(g) || 0) + 1);
+    }
+    return out;
+  };
+  const dice = (a: string, b: string) => {
+    const ba = bigrams(a);
+    const bb = bigrams(b);
+    let hit = 0;
+    for (const [g, n] of ba) hit += Math.min(n, bb.get(g) || 0);
+    const total =
+      [...ba.values()].reduce((x, y) => x + y, 0) +
+      [...bb.values()].reduce((x, y) => x + y, 0);
+    return total ? (2 * hit) / total : 0;
+  };
+  const wantHost = host(input.website);
+  const wantName = norm(input.name);
+  const wantTokens = new Set(wantName.split(" ").filter(Boolean));
+  return organisations
+    .map((o) => {
+      const reasons: string[] = [];
+      const oHost = host(o.website);
+      if (wantHost && oHost && oHost === wantHost)
+        reasons.push("Same website domain");
+      const oName = norm(o.name);
+      if (wantName && oName) {
+        const oTokens = new Set(oName.split(" ").filter(Boolean));
+        const shared = [...wantTokens].filter((t) => oTokens.has(t)).length;
+        const jaccard =
+          shared / (new Set([...wantTokens, ...oTokens]).size || 1);
+        if (oName === wantName) reasons.push("Same name");
+        else if (
+          (wantName.length > 3 && oName.includes(wantName)) ||
+          (oName.length > 3 && wantName.includes(oName))
+        )
+          reasons.push("One name contains the other");
+        else if (jaccard >= 0.5 && shared >= 1)
+          reasons.push("Shares most name words");
+        else if (wantName.length >= 5 && dice(wantName, oName) >= 0.7)
+          reasons.push("Similar spelling");
+      }
+      return { organisation: o, reasons };
+    })
+    .filter((s) => s.reasons.length)
+    .sort((a, b) => b.reasons.length - a.reasons.length)
+    .slice(0, 5)
+    .map(({ organisation: o, reasons }) => ({
+      id: o.id,
+      name: o.name,
+      website: o.website,
+      country: o.country,
+      division: o.division,
+      summary: o.summary.slice(0, 240),
+      reasons,
+    }));
+}
+/**
+ * Sentence-level difference between two captures of the same page. Captured
+ * text is whitespace-collapsed, so sentences are the smallest stable unit.
+ */
+export function captureDiff(before: string, after: string) {
+  const sentences = (t: string) => {
+    const counts = new Map<string, number>();
+    for (const p of t.split(/\n+|(?<=[.!?])\s+(?=[A-Z0-9“"(])/)) {
+      const v = p.trim();
+      if (v.length > 1) counts.set(v, (counts.get(v) || 0) + 1);
+    }
+    return counts;
+  };
+  const a = sentences(before);
+  const b = sentences(after);
+  // Sentences present more often in x than in y, repeated per extra occurrence.
+  const extra = (x: Map<string, number>, y: Map<string, number>) => {
+    const out: string[] = [];
+    for (const [v, n] of x)
+      for (let i = y.get(v) || 0; i < n && out.length < 40; i++) out.push(v);
+    return out;
+  };
+  return { added: extra(b, a), removed: extra(a, b) };
+}
+/** The capture ids of one web page across refreshes, newest first. */
+export function captureLineage(w: Workspace, source: Source): string[] {
+  const ids: string[] = [];
+  let cur: Source | undefined = source;
+  while (cur && !ids.includes(cur.id)) {
+    ids.push(cur.id);
+    const prev: string | undefined = cur.supersedes;
+    cur = prev ? w.sources.find((s) => s.id === prev) : undefined;
+  }
+  return ids;
 }
 export const packSchema = z.object({
   schemaVersion: z.literal("1.0.0"),
@@ -284,6 +631,14 @@ export function makePack(
   const issues = readiness(w, orgId, roleId);
   if (status === "ready" && issues.length)
     throw new HttpError(422, issues.join(" "));
+  if (
+    status === "ready" &&
+    reviewStateOf(w, get(w.roles, roleId)).state !== "ready"
+  )
+    throw new HttpError(
+      422,
+      "Mark the role profile ready (after review) before creating a ready snapshot. Edits made since it was marked ready return it to draft.",
+    );
   const findings = w.findings.filter(
     (f) =>
       f.orgId === orgId &&
@@ -313,7 +668,7 @@ export function makePack(
     status,
     employerApproval: false,
     organisation: get(w.organisations, orgId),
-    role: get(w.roles, roleId),
+    role: roleView(w, get(w.roles, roleId)),
     findings,
     sources,
     activities: w.activities.filter(

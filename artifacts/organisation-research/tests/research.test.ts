@@ -9,6 +9,7 @@ afterEach(() => {
 });
 it("retains one successful Max run when the second provider fails, excluding invented quotations", async () => {
   vi.stubEnv("MAX_CLAUDE_MODEL", "claude-test");
+  vi.stubEnv("ANTHROPIC_API_KEY", "test-key");
   vi.stubEnv("MAX_OPENAI_MODEL", "gpt-test");
   const store = await Store.open();
   await store.init();

@@ -8,15 +8,18 @@
     "dev": "concurrently -k \"PORT=3001 tsx watch server/index.ts\" \"vite --host 0.0.0.0\"",
     "build": "tsc --noEmit && vite build",
     "build:production": "pnpm run build && pnpm run audit",
-    "start": "NODE_ENV=production tsx server/index.ts",
+    "start": "scripts/start-production.sh",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "audit": "springpod-audit src",
-    "demo": "concurrently -k \"tsx tests/preview-server.ts\" \"vite --host 127.0.0.1\""
+    "occupations:import": "tsx scripts/occupations/import.mts",
+    "demo": "concurrently -k \"tsx tests/preview-server.ts\" \"vite --host 127.0.0.1\"",
+    "scanner": "scripts/clamav/clamav-daemon.sh"
   },
   "dependencies": {
     "@clerk/express": "2.1.67",
     "@clerk/react": "6.15.2",
+    "@clerk/shared": "4.31.1",
     "@electric-sql/pglite": "0.5.8",
     "@springpod/design-system": "0.2.0",
     "cheerio": "1.2.0",
@@ -24,6 +27,7 @@
     "express": "5.2.1",
     "express-rate-limit": "8.7.0",
     "helmet": "8.3.0",
+    "http-proxy-middleware": "4.2.0",
     "ipaddr.js": "2.5.0",
     "jszip": "3.10.2",
     "mammoth": "1.12.3",

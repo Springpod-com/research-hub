@@ -94,3 +94,4 @@ export {
   MobileNavbar,
   MobileNavbarMenuButton,
 } from "@springpod/design-system/components/ui/mobile-nav";
+export { Checkbox } from "@springpod/design-system/components/ui/checkbox";

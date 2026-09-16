@@ -46,13 +46,51 @@ const output = z.object({
     )
     .max(8),
 });
+type ProviderKind = "gemini" | "anthropic" | "openai";
+const OWN_KEY: Record<ProviderKind, string> = {
+  gemini: "GOOGLE_API_KEY",
+  anthropic: "ANTHROPIC_API_KEY",
+  openai: "OPENAI_API_KEY",
+};
+const PUBLIC_BASE_URL: Record<ProviderKind, string> = {
+  gemini: "https://generativelanguage.googleapis.com/v1beta",
+  anthropic: "https://api.anthropic.com",
+  openai: "https://api.openai.com/v1",
+};
+/**
+ * Where a provider's requests go. The team's own key (GOOGLE_API_KEY,
+ * ANTHROPIC_API_KEY, OPENAI_API_KEY) always targets the public API. Without an
+ * own key, the Replit AI Integrations proxy is used when it is provisioned
+ * (AI_INTEGRATIONS_<PROVIDER>_BASE_URL plus _API_KEY); that proxy speaks the
+ * same request and response formats, so no other code path changes.
+ * Model IDs are still taken only from the explicit *_MODEL variables.
+ */
+export function providerAccess(
+  kind: ProviderKind,
+): { baseUrl: string; key: string } | undefined {
+  const own = process.env[OWN_KEY[kind]];
+  if (own) return { baseUrl: PUBLIC_BASE_URL[kind], key: own };
+  const prefix = `AI_INTEGRATIONS_${kind.toUpperCase()}_`;
+  const baseUrl = process.env[`${prefix}BASE_URL`];
+  const key = process.env[`${prefix}API_KEY`];
+  if (baseUrl && key) return { baseUrl: baseUrl.replace(/\/+$/, ""), key };
+  return undefined;
+}
+function requireAccess(kind: ProviderKind) {
+  const access = providerAccess(kind);
+  if (!access)
+    throw new Error(
+      `No ${kind} access is configured. Set ${OWN_KEY[kind]} or provision the Replit AI integration.`,
+    );
+  return access;
+}
 export function providers() {
   return {
-    economy: !!process.env.GOOGLE_API_KEY && !!process.env.ECONOMY_MODEL,
-    power: !!process.env.ANTHROPIC_API_KEY && !!process.env.POWER_MODEL,
+    economy: !!providerAccess("gemini") && !!process.env.ECONOMY_MODEL,
+    power: !!providerAccess("anthropic") && !!process.env.POWER_MODEL,
     max:
-      !!process.env.ANTHROPIC_API_KEY &&
-      !!process.env.OPENAI_API_KEY &&
+      !!providerAccess("anthropic") &&
+      !!providerAccess("openai") &&
       !!process.env.MAX_CLAUDE_MODEL &&
       !!process.env.MAX_OPENAI_MODEL,
   };
@@ -79,11 +117,12 @@ export async function modelCall(model: string, prompt: string) {
   let input = 0;
   let out = 0;
   if (model.startsWith("gemini")) {
+    const access = requireAccess("gemini");
     const r = await requestJson(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-      { "x-goog-api-key": process.env.GOOGLE_API_KEY! },
+      `${access.baseUrl}/models/${model}:generateContent`,
+      { "x-goog-api-key": access.key },
       {
-        contents: [{ parts: [{ text: prompt }] }],
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
         generationConfig: {
           responseMimeType: "application/json",
           maxOutputTokens: 16000,
@@ -98,10 +137,11 @@ export async function modelCall(model: string, prompt: string) {
     input = r.usageMetadata?.promptTokenCount || 0;
     out = r.usageMetadata?.candidatesTokenCount || 0;
   } else if (model.startsWith("claude")) {
+    const access = requireAccess("anthropic");
     const r = await requestJson(
-      "https://api.anthropic.com/v1/messages",
+      `${access.baseUrl}/v1/messages`,
       {
-        "x-api-key": process.env.ANTHROPIC_API_KEY!,
+        "x-api-key": access.key,
         "anthropic-version": "2023-06-01",
       },
       {
@@ -118,9 +158,10 @@ export async function modelCall(model: string, prompt: string) {
     input = r.usage?.input_tokens || 0;
     out = r.usage?.output_tokens || 0;
   } else {
+    const access = requireAccess("openai");
     const r = await requestJson(
-      "https://api.openai.com/v1/responses",
-      { authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+      `${access.baseUrl}/responses`,
+      { authorization: `Bearer ${access.key}` },
       {
         model,
         input: prompt,

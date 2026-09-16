@@ -19,6 +19,11 @@ import {
   TABLE_CELL_EDGE_CLASS,
 } from "./components/table-kit";
 import * as U from "./ui";
+import { OrgSuggestions } from "./components/org-suggestions";
+import {
+  OccupationMatcher,
+  type OccupationRecord,
+} from "./components/occupation-matcher";
 const date = (s: string) =>
   new Date(s).toLocaleDateString("en-GB", {
     day: "numeric",
@@ -67,6 +72,12 @@ function Pick({
         ))}
       </U.SelectContent>
     </U.Select>
+  );
+}
+/** A cited web page was refreshed and the quotation is gone; unreviewed since. */
+function sourceChanged(f: Finding) {
+  return (f.sourceChanges || []).some(
+    (c) => !c.quoteFound && (!f.reviewedAt || f.reviewedAt < c.at),
   );
 }
 function Status({ value }: { value: string }) {
@@ -119,6 +130,7 @@ function FormModal({
   onClose,
   onSubmit,
   submitLabel = "Save",
+  render,
 }: {
   title: string;
   description: string;
@@ -126,6 +138,8 @@ function FormModal({
   onClose: () => void;
   onSubmit: (values: Record<string, string>, file?: File) => Promise<void>;
   submitLabel?: string;
+  /** Extra content rendered below the fields, given the live values. */
+  render?: (values: Record<string, string>) => ReactNode;
 }) {
   const [values, setValues] = useState<Record<string, string>>(() =>
     Object.fromEntries(fields.map((f) => [f.name, f.value || ""])),
@@ -205,6 +219,7 @@ function FormModal({
               )}
             </div>
           ))}
+          {render?.(values)}
           {error && (
             <U.Alert role="alert">
               <U.AlertDescription>{error}</U.AlertDescription>
@@ -244,6 +259,7 @@ export function App({
   const [modal, setModal] = useState<Modal>();
   const [evidence, setEvidence] = useState<Finding>();
   const [source, setSource] = useState<Source>();
+  const [matcher, setMatcher] = useState<Role>();
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
   const [roleId, setRoleId] = useState("all");
@@ -418,6 +434,20 @@ export function App({
           fields={orgFields(m)}
           onClose={close}
           submitLabel={m ? "Save changes" : "Create organisation"}
+          render={
+            m
+              ? undefined
+              : (v) => (
+                  <OrgSuggestions
+                    name={v.name || ""}
+                    website={v.website || ""}
+                    onOpen={(id) => {
+                      close();
+                      nav(`/org/${id}/overview`);
+                    }}
+                  />
+                )
+          }
           onSubmit={async (v) => {
             const created = m
               ? await patch(`/organisations/${m.id}`, {
@@ -881,6 +911,7 @@ export function App({
       return (
         <PackModal
           org={org!}
+          roles={orgRoles}
           roleOptions={roleOptions.filter(([id]) => id !== "all")}
           initialRole={roleId === "all" ? orgRoles[0]?.id : roleId}
           canReady={session?.role !== "researcher"}
@@ -1434,6 +1465,11 @@ export function App({
                       <div className="flex flex-wrap gap-2 mb-3">
                         <U.Badge variant="outline">{labels[f.kind]}</U.Badge>
                         <Status value={f.review} />
+                        {sourceChanged(f) && (
+                          <U.Badge variant="destructive">
+                            Source changed — re-review
+                          </U.Badge>
+                        )}
                         {f.runIds.length > 1 && (
                           <U.Badge variant="outline">
                             Found in {f.runIds.length} runs
@@ -1511,14 +1547,98 @@ export function App({
                         "Location and seniority not specified"}
                     </U.CardDescription>
                   </div>
-                  <U.Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setModal({ type: "role", item: r })}
-                  >
-                    Edit role
-                  </U.Button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <U.Badge
+                      variant={
+                        r.reviewState === "ready" ? "default" : "outline"
+                      }
+                    >
+                      {labels[r.reviewState || "draft"]}
+                    </U.Badge>
+                    {r.reviewState !== "in-review" && (
+                      <U.Button
+                        variant="outline"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() =>
+                          run(
+                            () =>
+                              post(`/roles/${r.id}/review-state`, {
+                                state: "in-review",
+                                version: r.version,
+                              }),
+                            "Sent for review",
+                          )
+                        }
+                      >
+                        {r.reviewState === "ready"
+                          ? "Reopen for review"
+                          : "Send for review"}
+                      </U.Button>
+                    )}
+                    {r.reviewState === "in-review" &&
+                      session?.role !== "researcher" && (
+                        <U.Button
+                          size="sm"
+                          disabled={busy}
+                          onClick={() =>
+                            run(
+                              () =>
+                                post(`/roles/${r.id}/review-state`, {
+                                  state: "ready",
+                                  version: r.version,
+                                }),
+                              "Role profile marked ready",
+                            )
+                          }
+                        >
+                          Mark ready
+                        </U.Button>
+                      )}
+                    {r.reviewState === "in-review" && (
+                      <U.Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() =>
+                          run(
+                            () =>
+                              post(`/roles/${r.id}/review-state`, {
+                                state: "draft",
+                                version: r.version,
+                              }),
+                            "Returned to draft",
+                          )
+                        }
+                      >
+                        Return to draft
+                      </U.Button>
+                    )}
+                    <U.Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setModal({ type: "role", item: r })}
+                    >
+                      Edit role
+                    </U.Button>
+                  </div>
                 </div>
+                {r.reviewChanged && (
+                  <U.Alert className="mt-3">
+                    <U.AlertDescription>
+                      Content changed after this profile was marked ready, so it
+                      is back in draft. Send it for review again before creating
+                      a ready snapshot.
+                    </U.AlertDescription>
+                  </U.Alert>
+                )}
+                {r.reviewState === "in-review" &&
+                  session?.role === "researcher" && (
+                    <p className="text-p5 text-muted-foreground mt-2">
+                      Waiting for a reviewer to confirm readiness. Only
+                      reviewers and administrators can mark a profile ready.
+                    </p>
+                  )}
               </U.CardHeader>
               <U.CardContent className="space-y-5">
                 <div>
@@ -1536,13 +1656,20 @@ export function App({
                 <div className="border-t border-border pt-5">
                   <div className="flex flex-wrap gap-3 justify-between items-center mb-3">
                     <h3 className="text-h6">Occupational context</h3>
-                    <U.Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setModal({ type: "occupation", item: r })}
-                    >
-                      Record a match
-                    </U.Button>
+                    <div className="flex flex-wrap gap-2">
+                      <U.Button size="sm" onClick={() => setMatcher(r)}>
+                        Find in official datasets
+                      </U.Button>
+                      <U.Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() =>
+                          setModal({ type: "occupation", item: r })
+                        }
+                      >
+                        Record manually
+                      </U.Button>
+                    </div>
                   </div>
                   {r.occupations.length ? (
                     r.occupations.map((o, i) => (
@@ -1550,9 +1677,25 @@ export function App({
                         key={i}
                         className="bg-muted rounded-xl p-4 mt-3 space-y-2"
                       >
-                        <p className="text-p3 font-medium">{o.title}</p>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-p3 font-medium">{o.title}</p>
+                          <U.Badge variant="outline">
+                            {o.status === "confirmed"
+                              ? "Reviewed match"
+                              : "Proposed — needs review"}
+                          </U.Badge>
+                          {(o.jurisdiction === "US" ||
+                            o.scheme === "O*NET") && (
+                            <U.Badge variant="outline">US data</U.Badge>
+                          )}
+                          <U.Badge variant="outline">
+                            {o.basis === "dataset-search"
+                              ? "Dataset search"
+                              : "Recorded manually"}
+                          </U.Badge>
+                        </div>
                         <p className="text-p5">
-                          {o.scheme} {o.code} · {o.datasetVersion} · {o.status}
+                          {o.scheme} {o.code} · {o.datasetVersion}
                         </p>
                         <p className="text-p4">{o.rationale}</p>
                         <a
@@ -1581,6 +1724,41 @@ export function App({
                             • {a}
                           </p>
                         ))}
+                        <div className="flex flex-wrap items-center gap-2 pt-1">
+                          <U.Button
+                            variant={
+                              o.status === "confirmed" ? "ghost" : "outline"
+                            }
+                            size="sm"
+                            disabled={busy}
+                            onClick={() =>
+                              run(
+                                () =>
+                                  post(`/roles/${r.id}/occupations/status`, {
+                                    scheme: o.scheme,
+                                    code: o.code,
+                                    status:
+                                      o.status === "confirmed"
+                                        ? "proposed"
+                                        : "confirmed",
+                                    version: r.version,
+                                  }),
+                                o.status === "confirmed"
+                                  ? "Match returned to proposed"
+                                  : "Match confirmed",
+                              )
+                            }
+                          >
+                            {o.status === "confirmed"
+                              ? "Return to proposed"
+                              : "Confirm match"}
+                          </U.Button>
+                          <span className="text-p5 text-muted-foreground">
+                            {o.jurisdiction === "US"
+                              ? "Confirm only after checking UK relevance."
+                              : "Confirm once you have checked it against the role."}
+                          </span>
+                        </div>
                       </div>
                     ))
                   ) : (
@@ -2216,7 +2394,10 @@ export function App({
       {renderModal()}
       {evidence && data && (
         <EvidencePanel
-          finding={evidence}
+          // Display follows the live record (a refresh may flag it while
+          // open); the save still carries the version seen when opened, so a
+          // change made meanwhile is rejected with 409 rather than overwritten.
+          finding={data.findings.find((f) => f.id === evidence.id) || evidence}
           sources={data.sources}
           onClose={() => setEvidence(undefined)}
           onSave={async (v) => {
@@ -2229,9 +2410,40 @@ export function App({
           }}
         />
       )}
+      {matcher && (
+        <OccupationMatcher
+          role={data?.roles.find((r) => r.id === matcher.id) || matcher}
+          onClose={() => setMatcher(undefined)}
+          onManual={() => {
+            setMatcher(undefined);
+            setModal({ type: "occupation", item: matcher });
+          }}
+          onRecord={async (record: OccupationRecord) => {
+            const current =
+              data?.roles.find((r) => r.id === matcher.id) || matcher;
+            await post(`/roles/${matcher.id}/occupations`, {
+              ...record,
+              version: current.version,
+            });
+            await reload();
+            U.toast({ title: "Occupational match recorded as proposed" });
+          }}
+        />
+      )}
       {source && (
         <SourcePanel
-          source={source}
+          source={data?.sources.find((s) => s.id === source.id) || source}
+          onRefresh={async () => {
+            const result: RefreshResult = await post(
+              `/sources/${source.id}/refresh`,
+              {},
+            );
+            await reload();
+            // Superseding bumps this capture's version; the panel's own refresh
+            // is not a conflict, so carry the new version for a later save.
+            setSource({ ...source, version: source.version + 1 });
+            return result;
+          }}
           onClose={() => setSource(undefined)}
           onSave={async (v) => {
             await patch(`/sources/${source.id}`, {
@@ -2281,6 +2493,16 @@ function EvidencePanel({
           </U.SheetDescription>
         </U.SheetHeader>
         <div className="space-y-6 py-6">
+          {sourceChanged(f) && (
+            <U.Alert>
+              <U.AlertTitle>The cited page changed</U.AlertTitle>
+              <U.AlertDescription>
+                A newer capture no longer contains this exact quotation. Check
+                the passage against the new capture before saving a review; the
+                finding blocks readiness until it is reviewed again.
+              </U.AlertDescription>
+            </U.Alert>
+          )}
           <div className="space-y-2">
             <U.Label htmlFor="review-claim">Finding</U.Label>
             <U.Textarea
@@ -2424,20 +2646,33 @@ function EvidencePanel({
     </U.Sheet>
   );
 }
+interface RefreshResult {
+  source: Source;
+  previousId: string;
+  changed: boolean;
+  added: string[];
+  removed: string[];
+  affectedFindingIds: string[];
+}
 function SourcePanel({
   source: s,
   onClose,
   onSave,
+  onRefresh,
 }: {
   source: Source;
   onClose: () => void;
   onSave: (v: any) => Promise<void>;
+  onRefresh: () => Promise<RefreshResult>;
 }) {
   const [permission, setPermission] = useState(s.permission);
   const [caption, setCaption] = useState(s.caption || "");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [image, setImage] = useState("");
+  const [refresh, setRefresh] = useState<RefreshResult>();
+  const diff =
+    refresh || (s.captureDiff ? { ...s.captureDiff, source: s } : undefined);
   useEffect(() => {
     if (s.kind !== "image") return;
     let url = "";
@@ -2504,6 +2739,85 @@ function SourcePanel({
               Download original
             </U.Button>
           )}
+          {s.kind === "web" && s.url && (
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                {s.supersededBy ? (
+                  <U.Badge variant="outline">
+                    Superseded by a newer capture
+                  </U.Badge>
+                ) : (
+                  <U.Button
+                    variant="outline"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => {
+                      setBusy(true);
+                      setError("");
+                      onRefresh()
+                        .then(setRefresh)
+                        .catch((e) => setError(e.message))
+                        .finally(() => setBusy(false));
+                    }}
+                  >
+                    {busy ? "Refreshing…" : "Refresh capture"}
+                  </U.Button>
+                )}
+                {s.supersedes && (
+                  <U.Badge variant="outline">
+                    Refreshed from an earlier capture
+                  </U.Badge>
+                )}
+                <span className="text-p5 text-muted-foreground">
+                  Captured {new Date(s.retrievedAt).toLocaleString()}
+                </span>
+              </div>
+              {diff && (
+                <U.Alert>
+                  <U.AlertDescription>
+                    <p className="text-p4 font-medium">
+                      {diff.changed
+                        ? `${refresh ? "The page changed." : "This capture differs from the one it refreshed."} ${diff.affectedFindingIds.length} finding${diff.affectedFindingIds.length === 1 ? "" : "s"} cite${diff.affectedFindingIds.length === 1 ? "s" : ""} passages that no longer appear and ${diff.affectedFindingIds.length === 1 ? "was" : "were"} flagged for re-review.`
+                        : refresh
+                          ? "No text change since the previous capture. A new capture was recorded with today’s date."
+                          : "No text change against the capture this one refreshed."}
+                    </p>
+                    {refresh && (
+                      <p className="text-p5 mt-1">
+                        This capture is kept unchanged; existing quotations
+                        still refer to it. New findings should cite the new
+                        capture.
+                      </p>
+                    )}
+                    {diff.removed.length > 0 && (
+                      <div className="mt-3">
+                        <p className="text-label-3">
+                          Removed ({diff.removed.length})
+                        </p>
+                        {diff.removed.slice(0, 8).map((t, i) => (
+                          <p key={i} className="text-p5 line-through">
+                            {t}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+                    {diff.added.length > 0 && (
+                      <div className="mt-3">
+                        <p className="text-label-3">
+                          Added ({diff.added.length})
+                        </p>
+                        {diff.added.slice(0, 8).map((t, i) => (
+                          <p key={i} className="text-p5">
+                            {t}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+                  </U.AlertDescription>
+                </U.Alert>
+              )}
+            </div>
+          )}
           {s.error && (
             <U.Alert>
               <U.AlertDescription>{s.error}</U.AlertDescription>
@@ -2565,6 +2879,7 @@ function SourcePanel({
 }
 function PackModal({
   org,
+  roles,
   roleOptions,
   initialRole,
   canReady,
@@ -2572,6 +2887,7 @@ function PackModal({
   onSaved,
 }: {
   org: Organisation;
+  roles: Role[];
   roleOptions: [string, string][];
   initialRole: string;
   canReady: boolean;
@@ -2581,6 +2897,7 @@ function PackModal({
   const [role, setRole] = useState(initialRole);
   const [status, setStatus] = useState("draft");
   const [issues, setIssues] = useState<string[]>([]);
+  const reviewState = roles.find((r) => r.id === role)?.reviewState || "draft";
   const [checking, setChecking] = useState(true);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -2635,6 +2952,14 @@ function PackModal({
                 : [["draft", "Draft research pack"]]
             }
           />
+          {status === "ready" && (
+            <p className="text-p5 text-muted-foreground">
+              Role profile review state: <strong>{labels[reviewState]}</strong>.{" "}
+              {reviewState === "ready"
+                ? "The reviewed content will be frozen as this snapshot."
+                : "A ready snapshot needs the role profile marked ready by a reviewer after readiness checks pass."}
+            </p>
+          )}
           {checking ? (
             <p className="text-p4">Checking readiness…</p>
           ) : issues.length ? (
@@ -2671,7 +2996,10 @@ function PackModal({
           </U.Button>
           <U.Button
             disabled={
-              busy || checking || (status === "ready" && issues.length > 0)
+              busy ||
+              checking ||
+              (status === "ready" &&
+                (issues.length > 0 || reviewState !== "ready"))
             }
             onClick={async () => {
               setBusy(true);

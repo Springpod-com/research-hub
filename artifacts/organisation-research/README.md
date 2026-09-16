@@ -36,19 +36,19 @@ Configure Replit Secrets:
 | --- | --- |
 | `DATABASE_URL` | New standalone PostgreSQL database |
 | `DATABASE_CONFIRMED_STANDALONE` | `true`, after checking database ownership |
-| `CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY` | The new application's Clerk keys |
-| `APP_ORIGINS` | Comma-separated exact allowed HTTPS origins, without trailing slashes; include the development origin if used |
-| `BOOTSTRAP_ADMIN_IDS` | Initial administrator Clerk user IDs; remove after provisioning |
-| `GOOGLE_API_KEY`, `ECONOMY_MODEL` | Economy provider credentials and exact API model ID |
-| `ANTHROPIC_API_KEY`, `POWER_MODEL` | Power provider credentials and exact API model ID |
-| `MAX_CLAUDE_MODEL`, `MAX_OPENAI_MODEL`, `OPENAI_API_KEY` | Dual analysis; Anthropic key is also required |
-| `UPLOAD_SCAN_COMMAND` | Absolute path to a working clamdscan-compatible scanner accepting standard input |
+| `CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY` | Clerk keys (this project uses Replit-managed Clerk; the Frontend API is proxied under `/api/__clerk` in production, set `CLERK_PROXY_DISABLED=true` for a self-owned Clerk domain) |
+| `APP_ORIGINS` | Optional. Comma-separated exact allowed HTTPS origins, without trailing slashes; defaults to the Replit deployment/development domains |
+| `BOOTSTRAP_ADMIN_EMAILS` | Verified primary email address(es) of the initial administrator(s); `BOOTSTRAP_ADMIN_IDS` (Clerk user IDs) also works. Remove after provisioning |
+| `AI_INTEGRATIONS_*` | Replit AI-integration proxy keys/base URLs for Gemini, Anthropic and OpenAI (managed by Replit) |
+| `ECONOMY_MODEL`, `POWER_MODEL`, `MAX_CLAUDE_MODEL`, `MAX_OPENAI_MODEL` | Exact API model IDs, chosen by the owner |
+| `UPLOAD_SCAN_COMMAND` | Production only: `scripts/clamav/scan-upload.sh` (in-project ClamAV; `CLAMAV_SIDECAR`, `CLAMAV_RUN_DIR`, `CLAMAV_DB_DIR` tune the sidecar) |
+| `OCCUPATION_DATA_DIR` | Optional. Directory of the bundled occupational datasets (defaults to `data/occupations`) |
 
 Model IDs deliberately have no guessed defaults. Choose exact IDs available to the provider account. The intended Max pairing is Fable + GPT-6 if available through those APIs. Verify both with a small live run before using real material. Models beginning `gemini` use Google, `claude` use Anthropic, and the remaining configured model uses OpenAI Responses.
 
 ### Clerk SSO
 
-Create a Clerk application for this workspace. Configure the intended enterprise SSO connection and approved organisational domains in Clerk; restrict account creation to approved team members. Configure development and production domains/redirects in Clerk. Add the first administrator's Clerk user ID to the bootstrap setting, sign in, then provision team membership inside this app. The roles are researcher, reviewer and admin. Researchers can review findings; only reviewers/admins can mark packs ready; only admins can manage membership.
+Create a Clerk application for this workspace. Configure the intended enterprise SSO connection and approved organisational domains in Clerk; restrict account creation to approved team members. Configure development and production domains/redirects in Clerk. Add the first administrator's verified email (or Clerk user ID) to the bootstrap setting, sign in, then provision team membership inside this app. The roles are researcher, reviewer and admin. Researchers can review findings; only reviewers/admins can mark packs ready; only admins can manage membership.
 
 **SSO is not established merely by adding keys.** Test your actual identity-provider connection, unapproved accounts, revoked members, file downloads and exports in the deployed environment. Do not replace Clerk with custom authentication.
 
@@ -62,7 +62,22 @@ A run captures the official homepage plus up to three linked about/careers/team/
 
 Max makes two independent analyses of the same captured source set. Exact duplicate findings merge model lineage. Other results remain available for human review; there is no semantic consensus or automated conflict resolution. Failed sources/models are visible and successful results survive partial failures. Source material is treated as untrusted evidence in the prompt. Factual findings require exact stored quotations, but reviewers must still verify that a passage actually supports the claim.
 
-Occupation matching is assisted by links to official SOC/O*NET sources and structured manual records. Activities, skills, knowledge and work context retain the scheme/version/source URL. Automatic dataset search/retrieval is a recorded follow-up, not an implemented integration.
+### Occupational reference data
+
+Two official datasets are bundled as versioned JSON in `data/occupations/` and loaded in memory:
+
+| Dataset | Role | Publisher and licence | Refresh |
+| --- | --- | --- | --- |
+| UK SOC 2020 (Volume 1 descriptions and Volume 2 coding index) | Primary classification, UK | Office for National Statistics — Open Government Licence v3.0 | `npm run occupations:import` |
+| O*NET database (occupations, tasks, work activities, skills, knowledge, work context, reported titles) | Supplementary, US | USDOL/ETA via the National Center for O*NET Development — CC BY 4.0 | `npm run occupations:import` (`ONET_VERSION`, default `31_0`) |
+
+"Find in official datasets" on a role profile runs deterministic keyword matching (weighted title/index-title/description/task retrieval) over both datasets and shows the matched terms for each candidate; there is no model and no unexplained confidence score. The researcher picks which dataset statements to keep as occupational context and records the match as *proposed* with its scheme, code, dataset version, source URL, jurisdiction, retrieval date and rationale (`basis: "dataset-search"`). The server takes the title, dataset version, source URL, jurisdiction and retrieval date from the bundled entry itself (client-supplied values are ignored), accepts only statements that appear in that entry, and always stores the match as proposed; a team member confirms it after checking it against the role ("Confirm match"). UK SOC and O*NET codes are stored separately; no equivalence is assumed, O*NET is labelled as US data, and manual recording remains available. The import script records the exact source URLs and retrieval date in each dataset file — keep the attribution when redistributing.
+
+### Review state and source refresh
+
+Each role profile carries a review state: any member can send it for review or return it to draft; only reviewers and administrators can mark it *ready*, and only when the readiness checks pass. A content fingerprint is stored at that point, so any later change to the role, organisation, findings, activities or questions returns the profile to draft. Ready snapshots can only be created from a profile that is currently ready; drafts can be created at any time.
+
+Captured web pages can be refreshed. The earlier capture is never modified (existing quotations keep referring to it); a new capture is recorded with `supersedes`/`supersededBy` links and a stored sentence-level summary of what was added and removed (`captureDiff`). Findings citing any earlier capture of the page whose exact quotation newly disappears are flagged "Source changed — re-review" and block readiness until they are reviewed again; their version is bumped so a review opened before the refresh cannot be saved over the change. A refresh that finds no text change leaves a ready role profile ready.
 
 ## Export contract
 

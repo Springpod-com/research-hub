@@ -1,1 +1,3 @@
-- [Replit adaptation](replit-adaptation.md) — 24h min package age blocks fresh deps (pin back, don't exclude); API fixed on 3001 in dev; DB guard flag; VM deployment target.
+- [Replit adaptation](replit-adaptation.md) — package min-age pins, dev port split, DB guard, VM target, AI-proxy quirks, ClamAV RAM, managed-Clerk proxy, detached shells die.
+- [Review, refresh and match rules](review-refresh-rules.md) — readiness fingerprint scope, per-quotation refresh flagging across lineage, server-hydrated dataset matches.
+- [Signed-in UI verification](ui-verification.md) — swap the dev API child for the fixture preview server to screenshot authenticated pages.

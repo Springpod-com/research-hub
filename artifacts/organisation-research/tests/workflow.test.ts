@@ -1,5 +1,8 @@
 import { beforeAll, afterAll, describe, it, expect } from "vitest";
 import request from "supertest";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { Store } from "../server/store.js";
 import { createApp } from "../server/app.js";
 import { sampleWorkspace, reviewer } from "./fixtures.js";
@@ -107,14 +110,12 @@ describe("Evidence and immutable pack workflow", () => {
     ).toBe(422);
     expect(
       (
-        await request(app())
-          .patch(`/api/questions/${q.body.id}`)
-          .send({
-            version: 1,
-            status: "answered",
-            answer: "Confirmed",
-            provenance: "Synthetic client meeting",
-          })
+        await request(app()).patch(`/api/questions/${q.body.id}`).send({
+          version: 1,
+          status: "answered",
+          answer: "Confirmed",
+          provenance: "Synthetic client meeting",
+        })
       ).status,
     ).toBe(200);
   });
@@ -131,19 +132,24 @@ describe("Evidence and immutable pack workflow", () => {
     ).toBe(403);
     expect(
       (
-        await request(app())
-          .post("/api/members")
-          .send({
-            userId: "user_test",
-            name: "Test",
-            role: "admin",
-            active: true,
-          })
+        await request(app()).post("/api/members").send({
+          userId: "user_test",
+          name: "Test",
+          role: "admin",
+          active: true,
+        })
       ).status,
     ).toBe(403);
   });
   it("exports identical immutable snapshots with increasing revisions", async () => {
     const path = `/api/roles/${fixture.roles[0].id}/packs`;
+    const markReady = async () => {
+      const role = (await request(app()).get("/api/workspace")).body.roles[0];
+      return request(app())
+        .post(`/api/roles/${role.id}/review-state`)
+        .send({ state: "ready", version: role.version });
+    };
+    expect((await markReady()).status).toBe(200);
     const first = await request(app()).post(path).send({ status: "ready" });
     expect(first.status).toBe(201);
     expect(first.body.employerApproval).toBe(false);
@@ -155,6 +161,11 @@ describe("Evidence and immutable pack workflow", () => {
           .send({ ...org, summary: "Later edited summary" })
       ).status,
     ).toBe(200);
+    // The edit returned the profile to draft; it must be re-reviewed first.
+    expect(
+      (await request(app()).post(path).send({ status: "ready" })).status,
+    ).toBe(422);
+    expect((await markReady()).status).toBe(200);
     const second = await request(app()).post(path).send({ status: "ready" });
     expect(second.body.revision).toBe(first.body.revision + 1);
     const json = await request(app()).get(`/api/packs/${first.body.id}/json`);
@@ -179,6 +190,38 @@ describe("Evidence and immutable pack workflow", () => {
           .attach("file", Buffer.from("not a pdf"), "bad.pdf")
       ).status,
     ).toBe(422);
+  });
+  it("applies the upload scanner's verdict and fails closed when it is unavailable", async () => {
+    // A stand-in for clamdscan: reads stdin, exit 1 on the marker, else 0.
+    const dir = mkdtempSync(path.join(os.tmpdir(), "scan-"));
+    const scanner = path.join(dir, "scan.sh");
+    writeFileSync(
+      scanner,
+      "#!/bin/sh\nif grep -q THREAT-MARKER; then exit 1; fi\nexit 0\n",
+      { mode: 0o755 },
+    );
+    const previous = process.env.UPLOAD_SCAN_COMMAND;
+    process.env.UPLOAD_SCAN_COMMAND = scanner;
+    try {
+      const url = `/api/organisations/${fixture.organisations[0].id}/upload`;
+      const clean = await request(app())
+        .post(url)
+        .attach("file", Buffer.from("Shift handover notes."), "notes.txt");
+      expect(clean.status).toBe(201);
+      const flagged = await request(app())
+        .post(url)
+        .attach("file", Buffer.from("THREAT-MARKER"), "notes.txt");
+      expect(flagged.status).toBe(422);
+      process.env.UPLOAD_SCAN_COMMAND = path.join(dir, "missing.sh");
+      const unavailable = await request(app())
+        .post(url)
+        .attach("file", Buffer.from("Shift handover notes."), "notes.txt");
+      expect(unavailable.status).toBe(503);
+    } finally {
+      if (previous === undefined) delete process.env.UPLOAD_SCAN_COMMAND;
+      else process.env.UPLOAD_SCAN_COMMAND = previous;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 describe("Public source network boundary", () => {

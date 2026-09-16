@@ -11,13 +11,15 @@ Springpod's internal organisation and role research workspace: researchers colle
 - `pnpm --filter @workspace/organisation-research run build:production` — typecheck + `vite build` + design audit (the deployment build command)
 - `pnpm --filter @workspace/organisation-research run start` — production: one Express process serves `dist`, `/api` and the embedded research worker on `PORT`
 - `pnpm --filter @workspace/organisation-research run demo` — fictional in-memory preview only; never deploy it
+- `pnpm --filter @workspace/organisation-research run occupations:import` — refreshes the bundled occupational datasets (`data/occupations/*.json`) from ONS SOC 2020 (OGL v3) and O*NET (CC BY 4.0); set `ONET_VERSION` / `OCC_CACHE_DIR` as needed, commit the JSON, re-run tests
+- `pnpm --filter @workspace/organisation-research run scanner` — starts the ClamAV daemon used by the upload scanner (production sidecar; needs ~1.3 GiB RAM for signatures)
 - Artifact-owned docs: `artifacts/organisation-research/docs/` (`REPLIT-HANDOVER.md`, `PRD.md`, `IMPLEMENTATION-STATUS.md`, `research-pack.schema.json`) and `artifacts/organisation-research/README.md`
 
 ### Environment
 
 Runtime-managed: `DATABASE_URL` (the project's own Replit PostgreSQL; verified empty and dedicated before use). Shared env var: `DATABASE_CONFIRMED_STANDALONE=true`.
 
-Secrets/values still owned by the workspace owner (see README table): `CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, `APP_ORIGINS`, `BOOTSTRAP_ADMIN_IDS`, provider keys with exact model IDs (`ECONOMY_MODEL`, `POWER_MODEL`, `MAX_CLAUDE_MODEL`, `MAX_OPENAI_MODEL`), `UPLOAD_SCAN_COMMAND`. Model IDs are never guessed or defaulted.
+Owner-provided values (see README table): Replit-managed Clerk keys (`CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`), `BOOTSTRAP_ADMIN_EMAILS` (verified primary email of the first administrator; `BOOTSTRAP_ADMIN_IDS` still works), Replit AI-integration proxy secrets, exact model IDs (`ECONOMY_MODEL`, `POWER_MODEL`, `MAX_CLAUDE_MODEL`, `MAX_OPENAI_MODEL` — never guessed or defaulted), production-only `UPLOAD_SCAN_COMMAND=scripts/clamav/scan-upload.sh`. Optional: `APP_ORIGINS` (defaults to `REPLIT_DOMAINS`/dev domain), `CLERK_PROXY_DISABLED=true` for a self-owned Clerk domain, `CLAMAV_SIDECAR`, `CLAMAV_RUN_DIR`, `CLAMAV_DB_DIR`, `OCCUPATION_DATA_DIR`.
 
 ## Stack
 
@@ -33,6 +35,9 @@ Secrets/values still owned by the workspace owner (see README table): `CLERK_PUB
 - Dev keeps the API on a fixed private port (3001) because the workflow's `PORT` belongs to Vite; production runs a single process on `PORT` serving frontend + API from one origin.
 - Deployment target is Reserved VM (`deploymentTarget = "vm"` in `.replit`) because the research worker is embedded in the web process and must stay running.
 - Template `api-server` and `lib/*` packages were removed: the app owns `/api` itself and the shared OpenAPI/Drizzle libs were unused.
+- Occupational reference data is bundled, versioned JSON (UK SOC 2020 primary, O*NET supplementary) loaded in memory by `server/occupations.ts`; matching is deterministic keyword retrieval with the matched terms as rationale. No live API, no model, no DB schema for it.
+- Pack review state lives on the role profile (`draft` → `in-review` → `ready`); a content fingerprint taken at "ready" returns the profile to draft on any later edit, and ready snapshots require the profile to be ready.
+- Refreshing a web source never mutates the earlier capture: a new source supersedes it and findings whose quotation disappeared are flagged for re-review (readiness gate) until reviewed again.
 - Four dependencies are pinned one patch behind the supplied lockfile because the workspace enforces a 24-hour minimum package age: `@clerk/express` 2.1.67, `@clerk/react` 6.15.2, `@types/node` 22.20.2, `prettier` 3.9.6. Bump back once the versions are older than a day.
 
 ## Product rules (from the handover brief)

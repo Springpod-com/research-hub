@@ -30,7 +30,14 @@ export interface Occupation {
   skills: string[];
   knowledge: string[];
   workContext: string[];
+  /** How the relationship was established; absent on older records (manual). */
+  basis?: "manual" | "dataset-search";
+  /** Jurisdiction of the dataset: UK SOC is UK; O*NET is US. */
+  jurisdiction?: "UK" | "US";
+  /** When the bundled dataset extract was retrieved (dataset-search matches). */
+  retrievedAt?: string;
 }
+export type ReviewState = "draft" | "in-review" | "ready";
 export interface Role extends Base {
   orgId: string;
   title: string;
@@ -39,6 +46,15 @@ export interface Role extends Base {
   responsibilities: string;
   boundaries: string;
   occupations: Occupation[];
+  /** Pack review state (PRD: draft → in review → ready). Absent = draft. */
+  reviewState?: ReviewState;
+  reviewStateBy?: string;
+  reviewStateAt?: string;
+  reviewStateNote?: string;
+  /** Content fingerprint taken when marked ready; edits since revert to draft. */
+  readyFingerprint?: string;
+  /** Server-computed: true when content changed after the role was marked ready. */
+  reviewChanged?: boolean;
 }
 export interface Source extends Base {
   orgId: string;
@@ -59,6 +75,19 @@ export interface Source extends Base {
   error?: string;
   caption?: string;
   runIds: string[];
+  /** Web captures: the earlier capture this one refreshed, and vice versa. */
+  supersedes?: string;
+  supersededBy?: string;
+  /** Stored on a refreshed capture: what changed against the capture it supersedes. */
+  captureDiff?: CaptureDiff;
+}
+export interface CaptureDiff {
+  previousId: string;
+  changed: boolean;
+  added: string[];
+  removed: string[];
+  /** Findings whose exact quotation no longer appeared in the new capture. */
+  affectedFindingIds: string[];
 }
 export interface Citation {
   sourceId: string;
@@ -82,6 +111,13 @@ export interface Finding extends Base {
     claim: string;
     review: Review;
     rationale: string;
+  }[];
+  /** Recorded when a cited web source is refreshed; a missing quote needs review. */
+  sourceChanges?: {
+    at: string;
+    sourceId: string;
+    newSourceId: string;
+    quoteFound: boolean;
   }[];
 }
 export interface Question extends Base {
@@ -209,4 +245,7 @@ export const labels: Record<string, string> = {
   "research-only": "Research only",
   "awaiting-confirmation": "Permission unconfirmed",
   "learner-approved": "Approved for learner use",
+  draft: "Draft",
+  "in-review": "In review",
+  ready: "Ready for storyboard drafting",
 };

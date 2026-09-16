@@ -1,4 +1,4 @@
-modules = ["nodejs-24", "postgresql-16"]
+modules = ["nodejs-24", "postgresql-16", "python-base-3.13"]
 
 [deployment]
 router = "application"
@@ -21,8 +21,17 @@ timeoutMs = 20000
 
 [nix]
 channel = "stable-25_05"
+packages = ["clamav"]
 
 [userenv]
 
 [userenv.shared]
 DATABASE_CONFIRMED_STANDALONE = "true"
+ECONOMY_MODEL = "gemini-3-flash-preview"
+MAX_CLAUDE_MODEL = "claude-opus-5"
+MAX_OPENAI_MODEL = "gpt-5.6-terra"
+POWER_MODEL = "claude-sonnet-5"
+BOOTSTRAP_ADMIN_EMAILS = "oliver.fisher@springpod.com"
+
+[userenv.production]
+UPLOAD_SCAN_COMMAND = "scripts/clamav/scan-upload.sh"
