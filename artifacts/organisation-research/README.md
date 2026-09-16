@@ -24,7 +24,7 @@ Try Northstar Logistics → Evidence → Inspect & review → Accept for draftin
 3. Run `npm run dev`. The browser uses port 5173; the private API uses 3001.
 4. Sign in, then use Team & settings to add approved Clerk user IDs and application roles. Clerk identity alone does not grant access.
 
-Without `DATABASE_URL`, development uses a local PGlite database in `.data/research`. Production requires a new PostgreSQL database plus `DATABASE_CONFIRMED_STANDALONE=true`. The application initialises its own two tables and immutability trigger. Never point it at Employer Intelligence or a shared production database.
+Without `DATABASE_URL`, development uses a local PGlite database in `.data/research`. Production requires a new PostgreSQL database plus `DATABASE_CONFIRMED_STANDALONE=true`. The application initialises its own three tables (workspace document, immutable packs, uploaded files) and immutability trigger. Never point it at Employer Intelligence or a shared production database.
 
 ## Replit configuration
 

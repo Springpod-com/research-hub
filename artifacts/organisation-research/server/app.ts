@@ -133,9 +133,9 @@ export function createApp(store: Store, options: AppOptions = {}) {
   app.use(
     helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }),
   );
-  // Reads are polled by every open tab (two requests every seven seconds) and
-  // a team often shares one office address, so they get their own, larger
-  // budget; writes keep the tighter one.
+  // Reads are polled by every open tab (two requests every few seconds while
+  // a research run is active) and a team often shares one office address, so
+  // they get their own, larger budget; writes keep the tighter one.
   const isRead = (req: Request) => ["GET", "HEAD"].includes(req.method);
   app.use(
     "/api",
@@ -268,7 +268,22 @@ export function createApp(store: Store, options: AppOptions = {}) {
   );
   app.get(
     "/api/workspace",
-    handler(async (_req, res) => {
+    handler(async (req, res) => {
+      // Every open tab polls this. A tab that already holds the current
+      // revision is told so before the document is read; the browser then
+      // hands the client its cached copy, and the client sees the unchanged
+      // tag and leaves the screen alone. The tag also names who the copy was
+      // made for: the browser's cache is shared by everyone who signs in on
+      // it, and an administrator's copy (full member records) must never be
+      // handed to the next person's poll as "unchanged".
+      const m = res.locals.member as { userId: string; role: string };
+      const etag = store.etag.replace(/"$/, `-${m.role}-${m.userId}"`);
+      res.setHeader("Cache-Control", "private, no-cache");
+      res.setHeader("ETag", etag);
+      if (req.headers["if-none-match"] === etag) {
+        res.status(304).end();
+        return;
+      }
       const w = await store.read();
       res.json({
         ...w,
@@ -334,7 +349,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
           audit(
             w,
             m.userId,
-            "Organisation updated; existing snapshots unchanged",
+            "Organisation updated; existing research packs unchanged",
             item.id,
           );
           return item;
@@ -914,7 +929,6 @@ export function createApp(store: Store, options: AppOptions = {}) {
         retrievedAt: now(),
         filename: f.originalname,
         mime,
-        blob: f.buffer.toString("base64"),
         caption: String(req.body.caption || "").slice(0, 4000),
         runIds: [],
         error:
@@ -922,26 +936,29 @@ export function createApp(store: Store, options: AppOptions = {}) {
             ? "No extractable text. Upload a text-readable document or record a passage manually."
             : undefined,
       };
-      await mutate(req, res, (w, m) => {
+      await mutate(req, res, async (w, m, db) => {
+        // The file itself is kept beside the workspace, not inside it, in the
+        // same transaction as the source record.
+        await Store.putFile(db, source.id, f.buffer);
         w.sources.push(source);
         audit(w, m.userId, "Source uploaded", source.id);
       });
-      const { blob, ...clean } = source;
-      res.status(201).json(clean);
+      res.status(201).json(source);
     }),
   );
   app.get(
     "/api/sources/:id/file",
     handler(async (req, res) => {
       const s = get((await store.read()).sources, String(req.params.id));
-      if (!s.blob) throw new HttpError(404, "No uploaded file.");
+      const data = await store.file(s.id);
+      if (!data) throw new HttpError(404, "No uploaded file.");
       res.setHeader("Cache-Control", "private, no-store");
       res.setHeader("Content-Type", s.mime || "application/octet-stream");
       res.setHeader(
         "Content-Disposition",
         `attachment; filename="${(s.filename || "source").replace(/[^a-zA-Z0-9._-]/g, "_")}"`,
       );
-      res.send(Buffer.from(s.blob, "base64"));
+      res.send(data);
     }),
   );
   app.patch(

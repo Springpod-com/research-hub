@@ -8,6 +8,8 @@ import type {
 } from "../../shared/occupations";
 import { api } from "../api";
 import * as U from "../ui";
+import { AutoTextarea } from "./auto-textarea";
+import { useFormCloseGuard } from "./form-close-guard";
 
 type Candidates = Partial<Record<OccupationScheme, OccupationCandidate[]>>;
 interface CandidateResponse {
@@ -68,6 +70,9 @@ export function OccupationMatcher({
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<OccupationCandidate>();
+  const [detailDirty, setDetailDirty] = useState(false);
+  const dirty = query !== "" || detailDirty;
+  const closeGuard = useFormCloseGuard({ dirty, onClose });
   useEffect(() => {
     let live = true;
     api<CandidateResponse>(`/roles/${role.id}/occupation-candidates`)
@@ -112,7 +117,7 @@ export function OccupationMatcher({
     <U.Dialog
       open
       onOpenChange={(v) => {
-        if (!v) onClose();
+        closeGuard.onOpenChange(v);
       }}
     >
       <U.DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-3xl">
@@ -136,6 +141,7 @@ export function OccupationMatcher({
               `${selected.scheme}:${selected.code}`,
             )}
             onBack={() => setSelected(undefined)}
+            onDirtyChange={setDetailDirty}
             onRecord={async (record) => {
               await onRecord(record);
               onClose();
@@ -162,7 +168,11 @@ export function OccupationMatcher({
                 aria-label="Search occupations"
                 placeholder="Search by job title or task, e.g. forklift, payroll"
                 value={query}
-                onChange={(e) => setQuery(e.target.value)}
+                autoFocus
+                onChange={(e) => {
+                  setQuery(e.target.value);
+                  setError("");
+                }}
                 className="flex-1 min-w-[16rem]"
               />
               <U.Button type="submit" variant="outline" disabled={loading}>
@@ -182,7 +192,7 @@ export function OccupationMatcher({
               )}
             </form>
             {error && (
-              <U.Alert role="alert">
+              <U.Alert role="alert" variant="destructive">
                 <U.AlertDescription>{error}</U.AlertDescription>
               </U.Alert>
             )}
@@ -250,13 +260,18 @@ export function OccupationMatcher({
               <U.Button type="button" variant="ghost" onClick={onManual}>
                 Record a match manually instead
               </U.Button>
-              <U.Button type="button" variant="outline" onClick={onClose}>
+              <U.Button
+                type="button"
+                variant="outline"
+                onClick={closeGuard.requestClose}
+              >
                 Close
               </U.Button>
             </U.DialogFooter>
           </div>
         )}
       </U.DialogContent>
+      {closeGuard.confirmation}
     </U.Dialog>
   );
 }
@@ -275,12 +290,14 @@ function CandidateDetail({
   dataset,
   alreadyRecorded,
   onBack,
+  onDirtyChange,
   onRecord,
 }: {
   candidate: OccupationCandidate;
   dataset?: DatasetSummary;
   alreadyRecorded: boolean;
   onBack: () => void;
+  onDirtyChange: (dirty: boolean) => void;
   onRecord: (record: OccupationRecord) => Promise<void>;
 }) {
   const [detail, setDetail] = useState<EntryResponse>();
@@ -293,6 +310,8 @@ function CandidateDetail({
     knowledge: new Set(),
     workContext: new Set(),
   });
+  const [initialPicked, setInitialPicked] =
+    useState<Record<ContextField, Set<string>>>();
   useEffect(() => {
     let live = true;
     api<EntryResponse>(
@@ -302,12 +321,14 @@ function CandidateDetail({
         if (!live) return;
         setDetail(r);
         // Pre-select the leading statements; the researcher trims or extends.
-        setPicked({
+        const defaults = {
           tasks: new Set(r.entry.tasks.slice(0, 6)),
           skills: new Set(r.entry.skills.slice(0, 6)),
           knowledge: new Set(r.entry.knowledge.slice(0, 6)),
           workContext: new Set(r.entry.workContext.slice(0, 4)),
-        });
+        };
+        setPicked(defaults);
+        setInitialPicked(defaults);
       })
       .catch((e) => {
         if (live) setError((e as Error).message);
@@ -316,6 +337,19 @@ function CandidateDetail({
       live = false;
     };
   }, [c.scheme, c.code]);
+  const dirty =
+    rationale !== c.rationale ||
+    (!!initialPicked &&
+      CONTEXT_FIELDS.some(
+        ([field]) =>
+          [...picked[field]].sort().join("\n") !==
+          [...initialPicked[field]].sort().join("\n"),
+      ));
+  useEffect(() => {
+    onDirtyChange(dirty);
+    return () => onDirtyChange(false);
+  }, [dirty, onDirtyChange]);
+  const closeGuard = useFormCloseGuard({ dirty, busy, onClose: onBack });
   const toggle = (field: ContextField, value: string) =>
     setPicked((p) => {
       const next = new Set(p[field]);
@@ -355,7 +389,12 @@ function CandidateDetail({
   }
   return (
     <div className="space-y-5">
-      <U.Button type="button" variant="ghost" size="sm" onClick={onBack}>
+      <U.Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        onClick={closeGuard.requestClose}
+      >
         ← Back to candidates
       </U.Button>
       <div className="space-y-2">
@@ -397,7 +436,7 @@ function CandidateDetail({
         </U.Alert>
       )}
       {error && (
-        <U.Alert role="alert">
+        <U.Alert role="alert" variant="destructive">
           <U.AlertDescription>{error}</U.AlertDescription>
         </U.Alert>
       )}
@@ -429,10 +468,7 @@ function CandidateDetail({
                         checked={picked[field].has(v)}
                         onCheckedChange={() => toggle(field, v)}
                       />
-                      <U.Label
-                        htmlFor={id}
-                        className="text-p5 font-normal"
-                      >
+                      <U.Label htmlFor={id} className="text-p5 font-normal">
                         {v}
                       </U.Label>
                     </div>
@@ -445,11 +481,15 @@ function CandidateDetail({
       )}
       <div className="space-y-2">
         <U.Label htmlFor="match-rationale">Why this matches the role</U.Label>
-        <U.Textarea
+        <AutoTextarea
           id="match-rationale"
           rows={4}
           value={rationale}
-          onChange={(e) => setRationale(e.target.value)}
+          autoFocus
+          onChange={(e) => {
+            setRationale(e.target.value);
+            setError("");
+          }}
         />
         <p className="text-p5 text-muted-foreground">
           Generated from the matched terms. Edit it to reflect your judgement;
@@ -460,7 +500,7 @@ function CandidateDetail({
         <U.Button
           type="button"
           variant="outline"
-          onClick={onBack}
+          onClick={closeGuard.requestClose}
           disabled={busy}
         >
           Cancel
@@ -477,6 +517,7 @@ function CandidateDetail({
               : "Record as proposed match"}
         </U.Button>
       </U.DialogFooter>
+      {closeGuard.confirmation}
     </div>
   );
 }

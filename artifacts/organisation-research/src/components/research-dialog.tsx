@@ -6,6 +6,7 @@ import type {
   Source,
 } from "../../shared/types";
 import * as U from "../ui";
+import { useFormCloseGuard } from "./form-close-guard";
 import {
   TIER_NAME,
   duration,
@@ -73,6 +74,9 @@ export function ResearchDialog({
   const [scope, setScope] = useState(initialRoleId || ORG_SCOPE);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [initial] = useState({ tier, scope });
+  const dirty = tier !== initial.tier || scope !== initial.scope;
+  const closeGuard = useFormCloseGuard({ dirty, busy, onClose });
   const roleId = scope === ORG_SCOPE ? undefined : scope;
   const running = jobs.find(
     (j) => j.orgId === org.id && j.roleId === roleId && isActive(j),
@@ -88,7 +92,7 @@ export function ResearchDialog({
     <U.Dialog
       open
       onOpenChange={(v) => {
-        if (!v && !busy) onClose();
+        closeGuard.onOpenChange(v);
       }}
     >
       <U.DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-xl">
@@ -96,15 +100,25 @@ export function ResearchDialog({
           <U.DialogTitle>Start research</U.DialogTitle>
           <U.DialogDescription>
             Reads {org.website ? "the organisation website and " : ""}the
-            captured sources for {org.name}, then drafts findings and client
-            questions for review. Nothing is accepted without a reviewer.
+            captured sources for {org.name}, then drafts findings and questions
+            for the organisation. Nothing is accepted without a reviewer.
           </U.DialogDescription>
         </U.DialogHeader>
         <div className="space-y-5">
           <div className="space-y-2">
             <U.Label htmlFor="research-scope">Research focus</U.Label>
-            <U.Select value={scope} onValueChange={setScope}>
-              <U.SelectTrigger id="research-scope" aria-label="Research focus">
+            <U.Select
+              value={scope}
+              onValueChange={(value) => {
+                setScope(value);
+                setError("");
+              }}
+            >
+              <U.SelectTrigger
+                id="research-scope"
+                aria-label="Research focus"
+                autoFocus
+              >
                 <U.SelectValue />
               </U.SelectTrigger>
               <U.SelectContent>
@@ -127,7 +141,10 @@ export function ResearchDialog({
             <legend className="text-p4 font-medium">Research tier</legend>
             <U.RadioGroup
               value={tier}
-              onValueChange={(v) => setTier(v as Tier)}
+              onValueChange={(v) => {
+                setTier(v as Tier);
+                setError("");
+              }}
               className="gap-3"
             >
               {TIERS.map((t) => {
@@ -203,13 +220,17 @@ export function ResearchDialog({
             </U.Alert>
           )}
           {error && (
-            <U.Alert role="alert">
+            <U.Alert role="alert" variant="destructive">
               <U.AlertDescription>{error}</U.AlertDescription>
             </U.Alert>
           )}
         </div>
         <U.DialogFooter>
-          <U.Button variant="outline" disabled={busy} onClick={onClose}>
+          <U.Button
+            variant="outline"
+            disabled={busy}
+            onClick={closeGuard.requestClose}
+          >
             Cancel
           </U.Button>
           <U.Button
@@ -237,6 +258,7 @@ export function ResearchDialog({
           </U.Button>
         </U.DialogFooter>
       </U.DialogContent>
+      {closeGuard.confirmation}
     </U.Dialog>
   );
 }

@@ -17,8 +17,17 @@ import type {
   Session,
   ResearchJob,
 } from "../shared/types";
-import { labels } from "../shared/types";
-import { api, post, patch, del, download, fetchBlob, ApiError } from "./api";
+import { labels as sharedLabels } from "../shared/types";
+import {
+  api,
+  apiTagged,
+  post,
+  patch,
+  del,
+  download,
+  fetchBlob,
+  ApiError,
+} from "./api";
 import { ResearchWorkspacePage } from "./components/research-workspace-page";
 import * as U from "./ui";
 import { OrgSuggestions } from "./components/org-suggestions";
@@ -28,6 +37,11 @@ import {
   type OccupationRecord,
 } from "./components/occupation-matcher";
 import { ResearchDialog } from "./components/research-dialog";
+import { AutoTextarea } from "./components/auto-textarea";
+import { useFormCloseGuard } from "./components/form-close-guard";
+import { TabStrip, useScrolledPast } from "./components/tab-strip";
+import { WhatsThis } from "./components/whats-this";
+import { DismissibleNote } from "./components/dismissible-note";
 import {
   ActiveRunBanner,
   RunCard,
@@ -36,6 +50,19 @@ import {
   scopeTitle,
 } from "./components/research-runs";
 import { currentRoute, href, splitRoute } from "./route";
+// Poll cadence in milliseconds: quick while a research run is in progress so
+// its stages show as they happen, relaxed otherwise.
+const POLL_ACTIVE = 3000;
+const POLL_IDLE = 12000;
+// Shown wherever a readiness check appears, so the term is explained the
+// same way everywhere.
+const READINESS_HELP =
+  "Readiness means the role's research passes the handover checks: responsibilities are described, evidence is accepted and valid, reviews and blocking questions are complete, changed sources are rechecked, and research runs have finished. It is a research milestone, not the organisation's approval.";
+const labels: Record<string, string> = {
+  ...sharedLabels,
+  company: "Organisation fact",
+  client: "Ask the organisation",
+};
 const TABS: [string, string][] = [
   ["overview", "Overview"],
   ["roles", "Roles"],
@@ -66,21 +93,28 @@ type Field = {
   kind?: "textarea" | "select" | "file";
   options?: [string, string][];
   hint?: string;
+  validateUrl?: boolean;
 };
 function Pick({
   value,
   onChange,
   options,
   label,
+  autoFocus,
 }: {
   value: string;
   onChange: (v: string) => void;
   options: [string, string][];
   label: string;
+  autoFocus?: boolean;
 }) {
   return (
     <U.Select value={value} onValueChange={onChange}>
-      <U.SelectTrigger aria-label={label} className="min-w-0">
+      <U.SelectTrigger
+        aria-label={label}
+        className="min-w-0"
+        autoFocus={autoFocus}
+      >
         <U.SelectValue placeholder={label} />
       </U.SelectTrigger>
       <U.SelectContent>
@@ -92,6 +126,26 @@ function Pick({
       </U.SelectContent>
     </U.Select>
   );
+}
+const WEB_ADDRESS_ERROR = "Enter a valid web address, e.g. https://example.com";
+function normaliseWebAddress(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  const candidate = /^[a-z][a-z\d+.-]*:/i.test(trimmed)
+    ? trimmed
+    : `https://${trimmed}`;
+  try {
+    const parsed = new URL(candidate);
+    if (
+      !["http:", "https:"].includes(parsed.protocol) ||
+      !parsed.hostname ||
+      (!parsed.hostname.includes(".") && parsed.hostname !== "localhost")
+    )
+      return;
+    return parsed.toString();
+  } catch {
+    return;
+  }
 }
 /** A cited web page was refreshed and the quotation is gone; unreviewed since. */
 function sourceChanged(f: Finding) {
@@ -168,12 +222,33 @@ function FormModal({
   const [file, setFile] = useState<File>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const initialValues = useRef(values).current;
+  const dirty =
+    !!file ||
+    fields.some((field) => values[field.name] !== initialValues[field.name]);
+  const closeGuard = useFormCloseGuard({ dirty, busy, onClose });
   async function submit(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError("");
+    setFieldErrors({});
+    const submittedValues = { ...values };
+    const nextFieldErrors: Record<string, string> = {};
+    for (const field of fields) {
+      if (!field.validateUrl) continue;
+      const normalised = normaliseWebAddress(values[field.name]);
+      if (values[field.name].trim() && !normalised)
+        nextFieldErrors[field.name] = WEB_ADDRESS_ERROR;
+      else submittedValues[field.name] = normalised || "";
+    }
+    if (Object.keys(nextFieldErrors).length) {
+      setFieldErrors(nextFieldErrors);
+      setBusy(false);
+      return;
+    }
     try {
-      await onSubmit(values, file);
+      await onSubmit(submittedValues, file);
       onClose();
     } catch (e) {
       setError((e as Error).message);
@@ -185,7 +260,7 @@ function FormModal({
     <U.Dialog
       open
       onOpenChange={(v) => {
-        if (!v && !busy) onClose();
+        closeGuard.onOpenChange(v);
       }}
     >
       <U.DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
@@ -194,7 +269,7 @@ function FormModal({
           <U.DialogDescription>{description}</U.DialogDescription>
         </U.DialogHeader>
         <form className="space-y-5" onSubmit={submit}>
-          {fields.map((f) => (
+          {fields.map((f, index) => (
             <div key={f.name} className="space-y-2">
               <U.Label htmlFor={`field-${f.name}`}>
                 {f.label}
@@ -204,8 +279,13 @@ function FormModal({
                 <Pick
                   label={f.label}
                   value={values[f.name] || (undefined as any)}
-                  onChange={(v) => setValues({ ...values, [f.name]: v })}
+                  onChange={(v) => {
+                    setValues({ ...values, [f.name]: v });
+                    setError("");
+                    setFieldErrors({ ...fieldErrors, [f.name]: "" });
+                  }}
                   options={f.options || []}
+                  autoFocus={index === 0}
                 />
               ) : f.kind === "file" ? (
                 <U.Input
@@ -213,28 +293,51 @@ function FormModal({
                   type="file"
                   required={f.required}
                   accept=".pdf,.docx,.txt,.md,.markdown,.png,.jpg,.jpeg"
-                  onChange={(e) => setFile(e.target.files?.[0])}
+                  autoFocus={index === 0}
+                  onChange={(e) => {
+                    setFile(e.target.files?.[0]);
+                    setError("");
+                  }}
                 />
               ) : f.kind === "textarea" ? (
-                <U.Textarea
+                <AutoTextarea
                   id={`field-${f.name}`}
                   required={f.required}
                   rows={4}
                   value={values[f.name]}
-                  onChange={(e) =>
-                    setValues({ ...values, [f.name]: e.target.value })
-                  }
+                  autoFocus={index === 0}
+                  onChange={(e) => {
+                    setValues({ ...values, [f.name]: e.target.value });
+                    setError("");
+                    setFieldErrors({ ...fieldErrors, [f.name]: "" });
+                  }}
                 />
               ) : (
                 <U.Input
                   id={`field-${f.name}`}
                   required={f.required}
                   value={values[f.name]}
-                  onChange={(e) =>
-                    setValues({ ...values, [f.name]: e.target.value })
+                  autoFocus={index === 0}
+                  aria-invalid={!!fieldErrors[f.name]}
+                  aria-describedby={
+                    fieldErrors[f.name] ? `field-${f.name}-error` : undefined
                   }
+                  onChange={(e) => {
+                    setValues({ ...values, [f.name]: e.target.value });
+                    setError("");
+                    setFieldErrors({ ...fieldErrors, [f.name]: "" });
+                  }}
                 />
               )}{" "}
+              {fieldErrors[f.name] && (
+                <p
+                  id={`field-${f.name}-error`}
+                  role="alert"
+                  className="text-p5 text-destructive"
+                >
+                  {fieldErrors[f.name]}
+                </p>
+              )}
               {f.hint && (
                 <p className="text-p5 text-muted-foreground">{f.hint}</p>
               )}
@@ -242,7 +345,7 @@ function FormModal({
           ))}
           {render?.(values)}
           {error && (
-            <U.Alert role="alert">
+            <U.Alert role="alert" variant="destructive">
               <U.AlertDescription>{error}</U.AlertDescription>
             </U.Alert>
           )}
@@ -251,7 +354,7 @@ function FormModal({
               type="button"
               variant="outline"
               disabled={busy}
-              onClick={onClose}
+              onClick={closeGuard.requestClose}
             >
               Cancel
             </U.Button>
@@ -261,6 +364,7 @@ function FormModal({
           </U.DialogFooter>
         </form>
       </U.DialogContent>
+      {closeGuard.confirmation}
     </U.Dialog>
   );
 }
@@ -319,11 +423,32 @@ export function App({
     replaceQuery(next);
   };
   const unauthorised = useRef(0);
+  // The workspace tag of the copy on screen. A poll that comes back with the
+  // same tag changes nothing, so nothing is re-rendered.
+  const shownTag = useRef<string | null>(null);
+  // Whether a research run is in progress, read by the poll timer, and the
+  // timer's own re-arm so a change of pace applies at once.
+  const running = useRef(false);
+  const reschedule = useRef<(() => void) | undefined>(undefined);
+  // Reloads overlap (a poll, a tab coming back, a save). Only the most
+  // recently started one may change the screen: an earlier one finishing
+  // last would put an older copy back.
+  const reloads = useRef(0);
   const reload = async () => {
-    const [s, d] = await Promise.all([api("/session"), api("/workspace")]);
+    const started = ++reloads.current;
+    const [s, w] = await Promise.all([
+      api("/session"),
+      apiTagged<Data>("/workspace"),
+    ]);
+    if (started !== reloads.current) return;
     unauthorised.current = 0;
-    setSession(s);
-    setData(d);
+    setSession((prev) =>
+      JSON.stringify(prev) === JSON.stringify(s) ? prev : s,
+    );
+    if (!w.etag || w.etag !== shownTag.current) {
+      shownTag.current = w.etag;
+      setData(w.data);
+    }
     setError("");
   };
   // Background refreshes fail now and then (a tab left in the background, a
@@ -336,6 +461,7 @@ export function App({
     const status = e instanceof ApiError ? e.status : undefined;
     if (status === 401) unauthorised.current += 1;
     if (status === 403 || (status === 401 && unauthorised.current >= 2)) {
+      shownTag.current = null;
       setData(undefined);
       setSession(undefined);
     }
@@ -361,17 +487,40 @@ export function App({
     void reload().catch(failed);
     // Hidden tabs do not poll: browsers throttle their timers and let the
     // session cookie lapse, and nobody is looking. Refresh on return instead.
-    const tick = () => {
-      if (!document.hidden) void reload().catch(failed);
+    // While a research run is in progress the poll is quick so its stages
+    // show as they happen; otherwise it only picks up teammates' changes.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let stopped = false;
+    const schedule = () => {
+      clearTimeout(timer);
+      if (!stopped)
+        timer = setTimeout(tick, running.current ? POLL_ACTIVE : POLL_IDLE);
     };
-    const timer = setInterval(tick, 7000);
-    document.addEventListener("visibilitychange", tick);
+    reschedule.current = schedule;
+    const tick = async () => {
+      if (!document.hidden) await reload().catch(failed);
+      schedule();
+    };
+    const woke = () => {
+      if (!document.hidden) void tick();
+    };
+    schedule();
+    document.addEventListener("visibilitychange", woke);
     return () => {
+      stopped = true;
+      clearTimeout(timer);
       window.removeEventListener("hashchange", hash);
-      document.removeEventListener("visibilitychange", tick);
-      clearInterval(timer);
+      document.removeEventListener("visibilitychange", woke);
     };
   }, []);
+  const anyRunning = !!data?.jobs.some((j) =>
+    ["queued", "researching"].includes(j.status),
+  );
+  useEffect(() => {
+    if (running.current === anyRunning) return;
+    running.current = anyRunning;
+    reschedule.current?.();
+  }, [anyRunning]);
   const run = async (fn: () => Promise<unknown>, message = "Saved") => {
     setBusy(true);
     try {
@@ -390,6 +539,9 @@ export function App({
   };
   const parts = path.split("/").filter(Boolean);
   const org = data?.organisations.find((o) => o.id === parts[1]);
+  // Whether the organisation heading has scrolled out of view (phones show
+  // a compact stand-in beside the tabs then).
+  const header = useScrolledPast<HTMLDivElement>(org?.id);
   const tab = TABS.some(([id]) => id === parts[2]) ? parts[2] : "overview";
   const tabName = TABS.find(([id]) => id === tab)![1];
   const orgRoles = data?.roles.filter((r) => r.orgId === org?.id) || [];
@@ -485,6 +637,7 @@ export function App({
       name: "website",
       label: "Organisation website",
       value: o?.website,
+      validateUrl: true,
       hint: "Confirm the correct company website. Leave blank if it is unknown.",
     },
     {
@@ -505,7 +658,7 @@ export function App({
             label: "Organisation summary",
             value: o.summary,
             kind: "textarea",
-            hint: "A working summary. Evidence-backed employer claims are recorded separately.",
+            hint: "A working summary. Evidence-backed claims about the organisation are recorded separately.",
           },
           {
             name: "brandNotes",
@@ -565,7 +718,7 @@ export function App({
       return (
         <FormModal
           title={m ? "Edit organisation" : "Create organisation"}
-          description="Confirm the employer’s identity. Existing organisations are checked before a new record is created."
+          description="Confirm the organisation’s identity. Existing organisations are checked before a new record is created."
           fields={orgFields(m)}
           onClose={close}
           submitLabel={m ? "Save changes" : "Create organisation"}
@@ -602,7 +755,7 @@ export function App({
       return (
         <FormModal
           title={m ? "Edit role" : "Add a role"}
-          description="Keep the employer’s actual title. Describe the work so occupational matches can be checked."
+          description="Keep the organisation’s own job title. Describe the work so occupational matches can be checked."
           fields={roleFields(m)}
           onClose={close}
           onSubmit={async (v) =>
@@ -707,7 +860,7 @@ export function App({
       return (
         <FormModal
           title="Add source material"
-          description="Record a source passage or client statement. The original wording stays inspectable."
+          description="Record a source passage or a statement from the organisation. The original wording stays inspectable."
           fields={[
             { name: "title", label: "Source title", required: true },
             {
@@ -716,7 +869,7 @@ export function App({
               value: "statement",
               kind: "select",
               options: [
-                ["statement", "Client or team statement"],
+                ["statement", "Statement from the organisation or team"],
                 ["document", "Document excerpt"],
                 ["occupation", "Occupational reference"],
               ],
@@ -740,7 +893,7 @@ export function App({
               kind: "select",
               options: [
                 ["user-supplied", "Team-supplied information"],
-                ["client-confirmed", "Recorded client confirmation"],
+                ["client-confirmed", "Confirmed by the organisation"],
                 ["public-source", "Public source"],
               ],
             },
@@ -766,7 +919,12 @@ export function App({
           title="Capture a public source"
           description="The page is fetched and stored as a dated research excerpt. Private network addresses are blocked."
           fields={[
-            { name: "url", label: "Public page URL", required: true },
+            {
+              name: "url",
+              label: "Public page URL",
+              required: true,
+              validateUrl: true,
+            },
             scopeField,
           ]}
           onClose={close}
@@ -842,7 +1000,7 @@ export function App({
               value: "company",
               kind: "select",
               options: [
-                ["company", "Employer fact"],
+                ["company", "Organisation fact"],
                 ["occupation", "Occupational context"],
                 ["proposal", "Design proposal"],
               ],
@@ -866,13 +1024,13 @@ export function App({
                     ] as [string, string],
                 ),
               ],
-              hint: "Required for employer facts and occupational context. Images have no captured text and cannot supply a quotation.",
+              hint: "Required for facts about the organisation and occupational context. Images have no captured text and cannot supply a quotation.",
             },
             {
               name: "quote",
               label: "Exact supporting passage",
               kind: "textarea",
-              hint: "Required for employer facts and occupational context; optional for design proposals. Copy the passage word for word from the source’s captured text. Line breaks and spacing do not matter; the wording must be identical.",
+              hint: "Required for facts about the organisation and occupational context; optional for design proposals. Copy the passage word for word from the source’s captured text. Line breaks and spacing do not matter; the wording must be identical.",
             },
             {
               name: "locator",
@@ -900,7 +1058,7 @@ export function App({
               v.kind === "proposal" && !v.quote.trim() ? undefined : chosen;
             if (v.kind !== "proposal" && !source)
               throw new Error(
-                "Employer facts and occupational context need a supporting source. Choose one and paste the exact passage, or classify the finding as a design proposal.",
+                "Facts about the organisation and occupational context need a supporting source. Choose one and paste the exact passage, or classify the finding as a design proposal.",
               );
             if (source && !source.text.trim())
               throw new Error(
@@ -935,7 +1093,9 @@ export function App({
     if (modal.type === "question")
       return (
         <FormModal
-          title={m ? "Respond to question" : "Add a client question"}
+          title={
+            m ? "Respond to question" : "Add a question for the organisation"
+          }
           description="An answer does not automatically verify a finding. Record its source and review affected evidence separately."
           fields={
             m
@@ -947,7 +1107,7 @@ export function App({
                     value: m.status,
                     options: [
                       ["open", "Open"],
-                      ["client", "Ask the client"],
+                      ["client", "Ask the organisation"],
                       ["deferred", "Defer"],
                       ["answered", "Answered"],
                     ],
@@ -984,7 +1144,7 @@ export function App({
                     value: "false",
                     kind: "select",
                     options: [
-                      ["false", "No — carry into client review"],
+                      ["false", "No — carry into the organisation's review"],
                       ["true", "Yes — identity or scope must be resolved"],
                     ],
                   },
@@ -1150,7 +1310,7 @@ export function App({
           onClose={close}
           onSaved={async () => {
             await reload();
-            U.toast({ title: "Snapshot created" });
+            U.toast({ title: "Research pack created" });
           }}
         />
       );
@@ -1216,7 +1376,7 @@ export function App({
             [
               "Organisations",
               data?.organisations.length || 0,
-              "Your shared employer library",
+              "Your shared organisation library",
             ],
             [
               "Needs review",
@@ -1307,7 +1467,7 @@ export function App({
               header: "Research status",
               cell: (o) => <Status value={orgState(o)} />,
             },
-            { id: "owner", header: "Owner", accessor: (o) => o.owner },
+            { id: "owner", header: "Research lead", accessor: (o) => o.owner },
             {
               id: "updated",
               header: "Updated",
@@ -1351,7 +1511,7 @@ export function App({
             ) : (
               <Empty
                 title="Your research starts here"
-                description="Create an organisation to bring together employer evidence, role research and questions for the client."
+                description="Create an organisation to bring together evidence about it, role research and questions for the organisation."
                 action={
                   <U.Button
                     variant="outline"
@@ -1533,7 +1693,7 @@ export function App({
                     {o.division || "Whole organisation"}
                   </span>,
                 )}
-                {detail("Research owner", o.owner || "Unassigned", !o.owner)}
+                {detail("Research lead", o.owner || "Unassigned", !o.owner)}
                 {detail(
                   "Sources",
                   kindCounts.length > 1
@@ -1588,9 +1748,13 @@ export function App({
               <p>1. Add sources and scope a role.</p>
               <p>2. Research and review the evidence.</p>
               <p>3. Export a stable pack for storyboarding.</p>
-              <p className="text-p5">
-                A ready pack is a research handover, not employer approval.
-              </p>
+              <DismissibleNote
+                id="ready-pack-handover"
+                title="About ready packs"
+              >
+                A ready pack is a research handover, not the organisation's
+                approval.
+              </DismissibleNote>
             </U.CardContent>
           </U.Card>
         </div>
@@ -1766,9 +1930,14 @@ export function App({
                 size="sm"
                 onClick={() => setModal({ type: "statement" })}
               >
-                Record passage or client statement
+                Record passage or organisation statement
               </U.Button>
             </div>
+            <DismissibleNote id="source-types" title="About source material">
+              Capture a public page, upload a document or photo, or record what
+              the organisation has told you. Each source stays linked to its
+              findings.
+            </DismissibleNote>
             <U.DataTable
               data={sources}
               getRowId={(s) => s.id}
@@ -1845,7 +2014,7 @@ export function App({
                 ) : (
                   <Empty
                     title="Bring your sources together"
-                    description="Capture a public page, upload a document or photo, or record what the client has told you. Each source stays linked to its findings."
+                    description="Capture or upload source material to begin."
                   />
                 )
               }
@@ -2087,15 +2256,17 @@ export function App({
                     <U.AlertDescription>
                       Content changed after this profile was marked ready, so it
                       is back in draft. Send it for review again before creating
-                      a ready snapshot.
+                      a ready research pack.
                     </U.AlertDescription>
                   </U.Alert>
                 )}
                 {r.reviewState === "in-review" &&
                   session?.role === "researcher" && (
                     <p className="text-p5 text-muted-foreground mt-2">
-                      Waiting for a reviewer to confirm readiness. Only
-                      reviewers and administrators can mark a profile ready.
+                      Waiting for a reviewer to confirm readiness{" "}
+                      <WhatsThis term="readiness">{READINESS_HELP}</WhatsThis>.
+                      Only reviewers and administrators can mark a profile
+                      ready.
                     </p>
                   )}
               </U.CardHeader>
@@ -2109,7 +2280,8 @@ export function App({
                 <div>
                   <p className="text-label-3 mb-2">Decision boundaries</p>
                   <p className="text-p4 text-muted-foreground whitespace-pre-wrap">
-                    {r.boundaries || "Needs client confirmation."}
+                    {r.boundaries ||
+                      "Needs confirmation from the organisation."}
                   </p>
                 </div>
                 <div className="border-t border-border pt-5">
@@ -2263,9 +2435,14 @@ export function App({
         <div className="flex flex-wrap justify-between gap-3">
           <div>
             <h2 className="text-h5">Questions for a better brief</h2>
-            <p className="text-p4 text-muted-foreground mt-2">
-              Keep unknowns explicit. Defer what the client needs to confirm.
-            </p>
+            <DismissibleNote
+              id="questions-guidance"
+              title="Working with unknowns"
+              className="mt-2"
+            >
+              Keep unknowns explicit. Defer what the organisation needs to
+              confirm.
+            </DismissibleNote>
           </div>
           <U.Button
             variant="outline"
@@ -2280,7 +2457,10 @@ export function App({
               <div className="flex flex-wrap gap-2">
                 <Status value={q.status} />
                 {q.blocking && (
-                  <U.Badge variant="outline">Blocks readiness</U.Badge>
+                  <U.Badge variant="outline">
+                    Blocks readiness{" "}
+                    <WhatsThis term="readiness">{READINESS_HELP}</WhatsThis>
+                  </U.Badge>
                 )}
               </div>
               <h3 className="text-h6">{q.text}</h3>
@@ -2347,16 +2527,13 @@ export function App({
             disabled={!orgRoles.length}
             onClick={() => setModal({ type: "pack" })}
           >
-            Create snapshot
+            Create research pack
           </U.Button>
         </div>
-        <U.Alert>
-          <U.AlertDescription>
-            Each snapshot has a separate revision and export-schema version.
-            Later edits never change it. Research readiness is not employer
-            approval.
-          </U.AlertDescription>
-        </U.Alert>
+        <DismissibleNote id="research-pack-intro" title="About research packs">
+          A research pack is a fixed copy of the role's evidence at the moment
+          it is created. Later edits never change it; create a new pack instead.
+        </DismissibleNote>
         {packs.map((p) => (
           <U.Card key={p.id}>
             <U.CardContent className="p-5">
@@ -2410,7 +2587,7 @@ export function App({
               </div>
               <details className="mt-4">
                 <summary className="cursor-pointer text-p4">
-                  Inspect snapshot
+                  Open research pack
                 </summary>
                 <div className="mt-4 space-y-3 text-p4">
                   <p>{p.role.responsibilities}</p>
@@ -2447,7 +2624,7 @@ export function App({
             ) : (
               <Empty
                 title="Your research, ready to hand over"
-                description="Create a draft snapshot at any point. A reviewer can mark a pack ready after the evidence review is complete."
+                description="Create a draft pack at any point. A reviewer can mark a pack ready after the evidence review is complete."
               />
             )}
           </U.Card>
@@ -2460,7 +2637,7 @@ export function App({
       {pageHeading(
         "Workspace",
         "Team & settings",
-        "Team access, research connections and the research prompt. Access is managed independently from Employer Intelligence.",
+        "Team access, research connections and research instructions. Access is managed independently from Employer Intelligence.",
       )}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <U.Card>
@@ -2671,21 +2848,31 @@ export function App({
                       )}
                     </U.BreadcrumbList>
                   </U.Breadcrumb>
-                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-5 mb-6">
-                    <div className="flex items-center gap-4">
+                  <div
+                    ref={header.ref}
+                    className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 lg:gap-5 mb-5 lg:mb-6"
+                  >
+                    <div className="flex items-center gap-3 lg:gap-4 min-w-0">
                       <U.PartnerAvatar
                         fallback={initials(org.name)}
                         alt={org.name}
                         size="lg"
+                        className="hidden sm:inline-flex"
                       />
-                      <div>
-                        <p className="text-label-3 uppercase text-muted-foreground">
+                      <U.PartnerAvatar
+                        fallback={initials(org.name)}
+                        alt={org.name}
+                        size="default"
+                        className="sm:hidden"
+                      />
+                      <div className="min-w-0">
+                        <p className="hidden sm:block text-label-3 uppercase text-muted-foreground">
                           Organisation workspace
                         </p>
-                        <h1 className="text-h3-mobile lg:text-h3 mt-1">
+                        <h1 className="text-h3-mobile lg:text-h3 sm:mt-1 break-words">
                           {org.name}
                         </h1>
-                        <p className="text-p4 text-muted-foreground mt-1">
+                        <p className="text-p5 sm:text-p4 text-muted-foreground mt-0.5 sm:mt-1">
                           {org.country} · {org.owner}
                         </p>
                       </div>
@@ -2729,13 +2916,42 @@ export function App({
                       })
                     }
                   >
-                    <U.PartnerTabsList className="w-full justify-start overflow-x-auto mb-6">
-                      {TABS.map(([id, name]) => (
-                        <U.PartnerTabsTrigger key={id} value={id}>
-                          {name}
-                        </U.PartnerTabsTrigger>
-                      ))}
-                    </U.PartnerTabsList>
+                    {/* On a phone the tab strip stays put while the page
+                        scrolls, and once the heading has gone by it carries
+                        the organisation's name and the research action. */}
+                    <div className="sticky -top-6 z-10 -mx-6 px-6 -mt-2 pt-2 bg-background md:static md:mx-0 md:px-0 md:mt-0 md:pt-0 mb-6">
+                      {header.past && (
+                        <div className="md:hidden flex items-center justify-between gap-3 py-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <U.PartnerAvatar
+                              fallback={initials(org.name)}
+                              alt={org.name}
+                              size="sm"
+                            />
+                            <p className="text-p3 font-semibold truncate">
+                              {org.name}
+                            </p>
+                          </div>
+                          <U.Button
+                            size="sm"
+                            disabled={busy}
+                            onClick={() => setModal({ type: "research" })}
+                          >
+                            <U.IconMagicWand size={16} />
+                            Research
+                          </U.Button>
+                        </div>
+                      )}
+                      <TabStrip>
+                        <U.PartnerTabsList className="w-max min-w-full justify-start">
+                          {TABS.map(([id, name]) => (
+                            <U.PartnerTabsTrigger key={id} value={id}>
+                              {name}
+                            </U.PartnerTabsTrigger>
+                          ))}
+                        </U.PartnerTabsList>
+                      </TabStrip>
+                    </div>
                     {tab !== "overview" && (
                       <div className="flex flex-wrap gap-3 justify-between items-center mb-6">
                         <div className="w-full sm:w-64">
@@ -2909,11 +3125,17 @@ function EvidencePanel({
   const [rationale, setRationale] = useState(f.rationale);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const dirty =
+    claim !== f.claim ||
+    kind !== f.kind ||
+    status !== f.review ||
+    rationale !== f.rationale;
+  const closeGuard = useFormCloseGuard({ dirty, busy, onClose });
   return (
     <U.Sheet
       open
       onOpenChange={(v) => {
-        if (!v && !busy) onClose();
+        closeGuard.onOpenChange(v);
       }}
     >
       <U.SheetContent className="w-full sm:max-w-2xl overflow-y-auto">
@@ -2921,7 +3143,7 @@ function EvidencePanel({
           <U.SheetTitle>Inspect the evidence</U.SheetTitle>
           <U.SheetDescription>
             Acceptance means suitable for drafting. It does not mean the
-            employer has approved it.
+            organisation has approved it.
           </U.SheetDescription>
         </U.SheetHeader>
         <div className="space-y-6 py-6">
@@ -2931,25 +3153,34 @@ function EvidencePanel({
               <U.AlertDescription>
                 A newer capture no longer contains this exact quotation. Check
                 the passage against the new capture before saving a review; the
-                finding blocks readiness until it is reviewed again.
+                finding blocks readiness{" "}
+                <WhatsThis term="readiness">{READINESS_HELP}</WhatsThis> until
+                it is reviewed again.
               </U.AlertDescription>
             </U.Alert>
           )}
           <div className="space-y-2">
             <U.Label htmlFor="review-claim">Finding</U.Label>
-            <U.Textarea
+            <AutoTextarea
               id="review-claim"
               rows={4}
               value={claim}
-              onChange={(e) => setClaim(e.target.value)}
+              autoFocus
+              onChange={(e) => {
+                setClaim(e.target.value);
+                setError("");
+              }}
             />
           </div>
           <Pick
             label="Classification"
             value={kind}
-            onChange={(v) => setKind(v as any)}
+            onChange={(v) => {
+              setKind(v as any);
+              setError("");
+            }}
             options={[
-              ["company", "Employer fact"],
+              ["company", "Organisation fact"],
               ["occupation", "Occupational context"],
               ["proposal", "Design proposal"],
             ]}
@@ -2996,7 +3227,7 @@ function EvidencePanel({
                     <p className="text-p5 text-muted-foreground">
                       Evidence basis:{" "}
                       {s?.verification === "client-confirmed"
-                        ? "Recorded client confirmation"
+                        ? "Confirmed by the organisation"
                         : s?.verification === "public-source"
                           ? "Public source"
                           : "Team-supplied material"}
@@ -3017,16 +3248,22 @@ function EvidencePanel({
             <U.Label htmlFor="review-rationale">
               Review notes and uncertainty
             </U.Label>
-            <U.Textarea
+            <AutoTextarea
               id="review-rationale"
               value={rationale}
-              onChange={(e) => setRationale(e.target.value)}
+              onChange={(e) => {
+                setRationale(e.target.value);
+                setError("");
+              }}
             />
           </div>
           <Pick
             label="Review decision"
             value={status}
-            onChange={(v) => setStatus(v as any)}
+            onChange={(v) => {
+              setStatus(v as any);
+              setError("");
+            }}
             options={[
               ["unreviewed", "Needs review"],
               ["accepted", "Accept for drafting"],
@@ -3035,7 +3272,7 @@ function EvidencePanel({
             ]}
           />
           {error && (
-            <U.Alert role="alert">
+            <U.Alert role="alert" variant="destructive">
               <U.AlertDescription>{error}</U.AlertDescription>
             </U.Alert>
           )}
@@ -3043,6 +3280,7 @@ function EvidencePanel({
             disabled={busy || !claim.trim()}
             onClick={async () => {
               setBusy(true);
+              setError("");
               try {
                 await onSave({ claim, kind, review: status, rationale });
               } catch (e) {
@@ -3075,6 +3313,7 @@ function EvidencePanel({
           )}
         </div>
       </U.SheetContent>
+      {closeGuard.confirmation}
     </U.Sheet>
   );
 }
@@ -3103,6 +3342,8 @@ function SourcePanel({
   const [busy, setBusy] = useState(false);
   const [image, setImage] = useState("");
   const [refresh, setRefresh] = useState<RefreshResult>();
+  const dirty = permission !== s.permission || caption !== (s.caption || "");
+  const closeGuard = useFormCloseGuard({ dirty, busy, onClose });
   const diff =
     refresh || (s.captureDiff ? { ...s.captureDiff, source: s } : undefined);
   useEffect(() => {
@@ -3126,7 +3367,7 @@ function SourcePanel({
     <U.Sheet
       open
       onOpenChange={(v) => {
-        if (!v && !busy) onClose();
+        closeGuard.onOpenChange(v);
       }}
     >
       <U.SheetContent className="w-full sm:max-w-2xl overflow-y-auto">
@@ -3260,16 +3501,23 @@ function SourcePanel({
           </div>
           <div className="space-y-2">
             <U.Label htmlFor="source-caption">Context and usage notes</U.Label>
-            <U.Textarea
+            <AutoTextarea
               id="source-caption"
               value={caption}
-              onChange={(e) => setCaption(e.target.value)}
+              autoFocus
+              onChange={(e) => {
+                setCaption(e.target.value);
+                setError("");
+              }}
             />
           </div>
           <Pick
             label="Usage permission"
             value={permission}
-            onChange={(v) => setPermission(v as any)}
+            onChange={(v) => {
+              setPermission(v as any);
+              setError("");
+            }}
             options={[
               ["research-only", "Research only"],
               ["awaiting-confirmation", "Awaiting permission confirmation"],
@@ -3281,7 +3529,7 @@ function SourcePanel({
             availability does not establish permission.
           </p>
           {error && (
-            <U.Alert role="alert">
+            <U.Alert role="alert" variant="destructive">
               <U.AlertDescription>{error}</U.AlertDescription>
             </U.Alert>
           )}
@@ -3289,6 +3537,7 @@ function SourcePanel({
             disabled={busy}
             onClick={async () => {
               setBusy(true);
+              setError("");
               try {
                 await onSave({ permission, caption });
               } catch (e) {
@@ -3302,6 +3551,7 @@ function SourcePanel({
           </U.Button>
         </div>
       </U.SheetContent>
+      {closeGuard.confirmation}
     </U.Sheet>
   );
 }
@@ -3329,6 +3579,8 @@ function PackModal({
   const [checking, setChecking] = useState(true);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const dirty = role !== initialRole || status !== "draft";
+  const closeGuard = useFormCloseGuard({ dirty, busy, onClose });
   useEffect(() => {
     let active = true;
     setChecking(true);
@@ -3350,27 +3602,34 @@ function PackModal({
     <U.Dialog
       open
       onOpenChange={(v) => {
-        if (!v && !busy) onClose();
+        closeGuard.onOpenChange(v);
       }}
     >
       <U.DialogContent>
         <U.DialogHeader>
-          <U.DialogTitle>Create a research snapshot</U.DialogTitle>
+          <U.DialogTitle>Create a research pack</U.DialogTitle>
           <U.DialogDescription>
-            {org.name} · The content will be frozen as a new revision.
+            {org.name} · A fixed copy will be created as a new revision.
           </U.DialogDescription>
         </U.DialogHeader>
         <div className="space-y-5">
           <Pick
             label="Role for this pack"
             value={role}
-            onChange={setRole}
+            onChange={(value) => {
+              setRole(value);
+              setError("");
+            }}
             options={roleOptions}
+            autoFocus
           />
           <Pick
             label="Pack status"
             value={status}
-            onChange={setStatus}
+            onChange={(value) => {
+              setStatus(value);
+              setError("");
+            }}
             options={
               canReady
                 ? [
@@ -3384,15 +3643,21 @@ function PackModal({
             <p className="text-p5 text-muted-foreground">
               Role profile review state: <strong>{labels[reviewState]}</strong>.{" "}
               {reviewState === "ready"
-                ? "The reviewed content will be frozen as this snapshot."
-                : "A ready snapshot needs the role profile marked ready by a reviewer after readiness checks pass."}
+                ? "The reviewed content is copied into this pack and never changes afterwards."
+                : "A ready pack needs the role profile marked ready by a reviewer after readiness checks pass."}
             </p>
           )}
           {checking ? (
-            <p className="text-p4">Checking readiness…</p>
+            <p className="text-p4">
+              Checking readiness…{" "}
+              <WhatsThis term="readiness">{READINESS_HELP}</WhatsThis>
+            </p>
           ) : issues.length ? (
             <U.Alert>
-              <U.AlertTitle>Before marking ready</U.AlertTitle>
+              <U.AlertTitle>
+                Before marking ready{" "}
+                <WhatsThis term="readiness">{READINESS_HELP}</WhatsThis>
+              </U.AlertTitle>
               <U.AlertDescription>
                 <ul className="list-disc pl-5 space-y-2 mt-3">
                   {issues.map((i) => (
@@ -3407,19 +3672,23 @@ function PackModal({
           ) : (
             <U.Alert>
               <U.AlertDescription>
-                Readiness checks passed. Client questions remain in the
-                handover; this is not employer approval.
+                Readiness checks passed. Questions for the organisation remain
+                in the handover; this is not the organisation's approval.
               </U.AlertDescription>
             </U.Alert>
           )}
           {error && (
-            <p role="alert" className="text-p4 text-destructive">
-              {error}
-            </p>
+            <U.Alert role="alert" variant="destructive">
+              <U.AlertDescription>{error}</U.AlertDescription>
+            </U.Alert>
           )}
         </div>
         <U.DialogFooter>
-          <U.Button variant="outline" disabled={busy} onClick={onClose}>
+          <U.Button
+            variant="outline"
+            disabled={busy}
+            onClick={closeGuard.requestClose}
+          >
             Cancel
           </U.Button>
           <U.Button
@@ -3431,6 +3700,7 @@ function PackModal({
             }
             onClick={async () => {
               setBusy(true);
+              setError("");
               try {
                 await post(`/roles/${role}/packs`, { status });
                 await onSaved();
@@ -3442,10 +3712,11 @@ function PackModal({
               }
             }}
           >
-            {busy ? "Creating…" : "Create immutable snapshot"}
+            {busy ? "Creating…" : "Create research pack"}
           </U.Button>
         </U.DialogFooter>
       </U.DialogContent>
+      {closeGuard.confirmation}
     </U.Dialog>
   );
 }

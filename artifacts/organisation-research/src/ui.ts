@@ -123,3 +123,8 @@ export {
   RadioGroupItem,
 } from "@springpod/design-system/components/ui/radio-group";
 export { Spinner } from "@springpod/design-system/components/ui/spinner";
+export {
+  Popover,
+  PopoverTrigger,
+  PopoverContent,
+} from "@springpod/design-system/components/ui/popover";

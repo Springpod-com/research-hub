@@ -26,7 +26,7 @@ Owner-provided values (see README table): Replit-managed Clerk keys (`CLERK_PUBL
 - pnpm workspace; the app lives in `artifacts/organisation-research` (`@workspace/organisation-research`)
 - Frontend: React 19 + Vite 7 + Tailwind 4 + `@springpod/design-system` (single import in `src/index.css`)
 - Backend: Express 5, `@clerk/express`, zod 4, multer, helmet, express-rate-limit
-- Data: `pg` against PostgreSQL in Replit/production; PGlite in `.data/research` only when `DATABASE_URL` is absent. Two tables (`research_workspace`, `research_packs`) plus an immutability trigger, created by the app itself
+- Data: `pg` against PostgreSQL in Replit/production; PGlite in `.data/research` only when `DATABASE_URL` is absent. Three tables (`research_workspace` — one JSON document, `research_packs`, `research_files` — uploaded bytes, one row per source) plus an immutability trigger, created by the app itself; a start-up migration moves any legacy base64 `blob` fields out of the document. Keep bulk data out of the workspace document (see `.agents/memory/workspace-document-load.md`)
 - Tests: Vitest + supertest
 
 ## Architecture decisions

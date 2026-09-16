@@ -103,8 +103,8 @@ export function OrgSuggestions({
         </div>
       ))}
       <p className="text-p5 text-muted-foreground">
-        Create a new record only if none of these is the same employer. A
-        different division of the same employer is allowed.
+        Create a new record only if none of these is the same organisation. A
+        different division of the same organisation is allowed.
       </p>
     </div>
   );

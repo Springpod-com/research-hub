@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import * as U from "../ui";
+import { AutoTextarea } from "./auto-textarea";
 import type { Member, ModelSlot } from "../../shared/types";
 
 type Slot = {
@@ -231,8 +232,8 @@ export function ResearchSettings({
       apply(v);
       U.toast({
         title: body.reset
-          ? "Research prompt reset to the default"
-          : `Research prompt saved as version ${v.prompt.version}`,
+          ? "Research instructions reset to the default"
+          : `Research instructions saved as version ${v.prompt.version}`,
         description:
           "New research runs use it from now on; finished runs keep the version they used.",
       });
@@ -357,7 +358,7 @@ export function ResearchSettings({
         <U.CardHeader>
           <div className="flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-start">
             <div className="min-w-0 flex-1">
-              <U.CardTitle>Research prompt</U.CardTitle>
+              <U.CardTitle>Research instructions</U.CardTitle>
               <U.CardDescription>
                 The instructions every research run sends to the model, before
                 the evidence. Review them here; administrators can change them.
@@ -373,7 +374,7 @@ export function ResearchSettings({
           </div>
         </U.CardHeader>
         <U.CardContent className="space-y-4">
-          <U.Textarea
+          <AutoTextarea
             aria-label="Research instructions"
             value={text}
             readOnly={!isAdmin}
@@ -386,7 +387,8 @@ export function ResearchSettings({
               {view.prompt.updatedAt
                 ? `Last changed by ${who(view.prompt.updatedBy)} on ${fmt(view.prompt.updatedAt)}. `
                 : "Never changed. "}
-              Each research run records the prompt version it used.
+              Each research run records the research instructions version it
+              used.
             </p>
             {isAdmin && (
               <div className="flex flex-wrap gap-2">

@@ -71,6 +71,7 @@ export interface Source extends Base {
   retrievedAt: string;
   mime?: string;
   filename?: string;
+  /** Legacy: uploads once lived here as base64; they now live beside the workspace and are moved out on start-up. */
   blob?: string;
   error?: string;
   caption?: string;

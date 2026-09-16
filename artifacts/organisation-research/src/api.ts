@@ -50,6 +50,18 @@ export async function api<T = any>(
   if (!r.ok) throw await failure(r, `Request failed (${r.status})`);
   return r.json();
 }
+/**
+ * Like `api`, but also returns the response's ETag. The server answers a poll
+ * that carries the current tag with 304; the browser then supplies its cached
+ * copy, and an unchanged tag tells the caller there is nothing new to show.
+ */
+export async function apiTagged<T = any>(
+  path: string,
+): Promise<{ data: T; etag: string | null }> {
+  const r = await request(path, {});
+  if (!r.ok) throw await failure(r, `Request failed (${r.status})`);
+  return { data: await r.json(), etag: r.headers.get("etag") };
+}
 /** Sends a request, renewing the session and retrying once after a 401. */
 async function request(path: string, options: RequestInit) {
   let r = await send(path, options);

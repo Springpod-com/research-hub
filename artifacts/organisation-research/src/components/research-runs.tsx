@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { ResearchJob, Role } from "../../shared/types";
 import * as U from "../ui";
+import { WhatsThis } from "./whats-this";
 
 export type Tier = ResearchJob["tier"];
 export const TIER_NAME: Record<Tier, string> = {
@@ -159,7 +160,17 @@ export function RunCard({
           <p className="text-p5 text-muted-foreground">
             {TIER_NAME[j.tier]} · started {when(j.createdAt)} ·{" "}
             {active ? "running for" : "took"} {duration(elapsed(j, now))}
-            {j.promptVersion ? ` · instructions v${j.promptVersion}` : ""}
+            {j.promptVersion ? (
+              <>
+                {" "}
+                · research instructions v{j.promptVersion}{" "}
+                <WhatsThis term="research instructions version">
+                  The version of the written instructions the research assistant
+                  followed for this run. Team &amp; settings shows the current
+                  version.
+                </WhatsThis>
+              </>
+            ) : null}
           </p>
         </div>
         {badge}

@@ -232,7 +232,7 @@ export function validateCitations(
   if (kind !== "proposal" && !citations.length)
     throw new HttpError(
       422,
-      "Employer facts and occupational context need a supporting source passage. Choose a source and paste the exact passage, or classify the finding as a design proposal.",
+      "Facts about the organisation and occupational context need a supporting source passage. Choose a source and paste the exact passage, or classify the finding as a design proposal.",
     );
   for (const c of citations) {
     const s = get(sources, c.sourceId);
@@ -251,7 +251,7 @@ export function validateCitations(
     if (kind === "company" && s.kind === "occupation")
       throw new HttpError(
         422,
-        "Occupational context cannot establish an employer fact.",
+        "Occupational context cannot establish a fact about the organisation.",
       );
   }
 }
@@ -275,7 +275,9 @@ export function readiness(w: Workspace, orgId: string, roleId: string) {
   if (!role.responsibilities.trim())
     issues.push("Describe the role responsibilities.");
   if (!relevant.some((f) => f.kind === "company" && f.review === "accepted"))
-    issues.push("Accept at least one evidence-backed employer finding.");
+    issues.push(
+      "Accept at least one evidence-backed finding about the organisation.",
+    );
   if (
     relevant.some(
       (f) => f.review === "unreviewed" || f.review === "clarification",
@@ -669,7 +671,7 @@ export function makePack(
   )
     throw new HttpError(
       422,
-      "Mark the role profile ready (after review) before creating a ready snapshot. Edits made since it was marked ready return it to draft.",
+      "Mark the role profile ready (after review) before creating a ready research pack. Edits made since it was marked ready return it to draft.",
     );
   const findings = w.findings.filter(
     (f) =>
@@ -718,7 +720,7 @@ export function makePack(
       ...w.jobs
         .filter((j) => j.orgId === orgId && (!j.roleId || j.roleId === roleId))
         .flatMap((j) => j.errors),
-      "Research readiness is not employer approval. Occupational context and activity ideas require client validation.",
+      "Research readiness is not the organisation's approval. Occupational context and activity ideas require validation by the organisation.",
     ],
   };
   packSchema.parse(pack);
@@ -730,10 +732,10 @@ export function packMarkdown(p: Pack): string {
     `# ${heading(p.organisation.name)} — ${heading(p.role.title)}`,
     `Pack ${p.id} · Revision ${p.revision} · Schema ${p.schemaVersion}`,
     `Status: ${p.status === "ready" ? "Ready for storyboard drafting" : "Draft"}\n\nCreated: ${p.createdAt}\n\nCreated by: ${p.createdBy}\n\nReviewer: ${p.reviewer || "Not yet reviewed"}`,
-    "**Research readiness is not employer approval.**",
+    "**Research readiness is not the organisation's approval.**",
     "## Organisation",
     p.organisation.summary || "Summary not recorded.",
-    `Website: ${p.organisation.website}\n\nCountry: ${p.organisation.country}\n\nDivision: ${p.organisation.division || "Not specified"}\n\nOwner: ${p.organisation.owner}\n\nBrand guidance: ${p.organisation.brandNotes || "Not supplied"}`,
+    `Website: ${p.organisation.website}\n\nCountry: ${p.organisation.country}\n\nDivision: ${p.organisation.division || "Not specified"}\n\nResearch lead: ${p.organisation.owner}\n\nBrand guidance: ${p.organisation.brandNotes || "Not supplied"}`,
     "## Role",
     `Location: ${p.role.location || "Not specified"}\n\nSeniority: ${p.role.seniority || "Not specified"}\n\nResponsibilities: ${p.role.responsibilities}\n\nDecision boundaries: ${p.role.boundaries || "Needs confirmation"}`,
     "## Occupational profile",
@@ -754,23 +756,23 @@ export function packMarkdown(p: Pack): string {
   out.push("## Candidate activities — proposals");
   for (const a of p.activities)
     out.push(
-      `### ${heading(a.title)} · ${a.id}\n\nAction: ${a.action}\n\nOutput: ${a.output}\n\nMaterials: ${a.materials}\n\nLearning: ${a.learning}\n\nClient confirmation: ${a.confirmation || "Required during storyboard review"}\n\nFinding references: ${a.findingIds.join(", ")}\n\nReview: ${a.review}`,
+      `### ${heading(a.title)} · ${a.id}\n\nAction: ${a.action}\n\nOutput: ${a.output}\n\nMaterials: ${a.materials}\n\nLearning: ${a.learning}\n\nOrganisation confirmation: ${a.confirmation || "Required during storyboard review"}\n\nFinding references: ${a.findingIds.join(", ")}\n\nReview: ${a.review}`,
     );
   out.push("## Sources and materials");
   for (const s of p.sources)
     out.push(
-      `### ${heading(s.title)} · ${s.id}\n\nType: ${s.kind} · Permission: ${s.permission} · Verification: ${s.verification}\n\nURL: ${s.url || "Uploaded or recorded material"}\n\nRetrieved: ${s.retrievedAt} · Published: ${s.publishedAt || "Unknown"}\n\nSupplied by: ${s.suppliedBy}\n\nLocation: ${s.locator}\n\n${s.caption || ""}\n\n${s.text}`,
+      `### ${heading(s.title)} · ${s.id}\n\nType: ${s.kind} · Permission: ${s.permission} · Verification: ${s.verification === "client-confirmed" ? "Confirmed by the organisation" : s.verification}\n\nURL: ${s.url || "Uploaded or recorded material"}\n\nRetrieved: ${s.retrievedAt} · Published: ${s.publishedAt || "Unknown"}\n\nSupplied by: ${s.suppliedBy}\n\nLocation: ${s.locator}\n\n${s.caption || ""}\n\n${s.text}`,
     );
-  out.push("## Questions and client input");
+  out.push("## Questions and organisation input");
   for (const q of p.questions)
     out.push(
-      `### ${heading(q.text)} · ${q.id}\n\nWhy: ${q.why}\n\nStatus: ${q.status} · Blocking: ${q.blocking ? "Yes" : "No"}\n\nAssigned to: ${q.assignee || "Unassigned"}\n\nAnswer: ${q.answer || "Unanswered"}\n\nAnswered by: ${q.answeredBy || "—"}\n\nProvenance: ${q.provenance || "Not recorded"}`,
+      `### ${heading(q.text)} · ${q.id}\n\nWhy: ${q.why}\n\nStatus: ${q.status === "client" ? "Ask the organisation" : q.status} · Blocking: ${q.blocking ? "Yes" : "No"}\n\nAssigned to: ${q.assignee || "Unassigned"}\n\nAnswer: ${q.answer || "Unanswered"}\n\nAnswered by: ${q.answeredBy || "—"}\n\nProvenance: ${q.provenance || "Not recorded"}`,
     );
   out.push(
     "## Limitations",
     ...p.limitations.map((l) => `- ${l}`),
-    "## Complete snapshot metadata",
-    "The JSON below preserves every field, including history and source lineage, from this same immutable snapshot.",
+    "## Complete research pack metadata",
+    "The JSON below preserves every field, including history and the earlier captures each web source replaced, from this same fixed research pack.",
     "```json",
     JSON.stringify(p, null, 2),
     "```",

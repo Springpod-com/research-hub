@@ -43,3 +43,12 @@ async function close() {
 }
 process.on("SIGTERM", close);
 process.on("SIGINT", close);
+// A promise nobody awaited (a background capture, a timer callback) must not
+// take every user's session down with it. Log it and carry on; genuine
+// exceptions still stop the process so the platform restarts it cleanly.
+process.on("unhandledRejection", (reason) =>
+  console.error(
+    "[server] unhandled rejection:",
+    reason instanceof Error ? (reason.stack ?? reason.message) : reason,
+  ),
+);
