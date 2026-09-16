@@ -191,7 +191,7 @@ function FormModal({
                   id={`field-${f.name}`}
                   type="file"
                   required={f.required}
-                  accept=".pdf,.docx,.txt,.png,.jpg,.jpeg"
+                  accept=".pdf,.docx,.txt,.md,.markdown,.png,.jpg,.jpeg"
                   onChange={(e) => setFile(e.target.files?.[0])}
                 />
               ) : f.kind === "textarea" ? (
@@ -556,7 +556,7 @@ export function App({
       return (
         <FormModal
           title="Upload source material"
-          description="PDF, DOCX, TXT, PNG or JPEG. Maximum 10 MB. Uploaded assets start with unconfirmed usage permission."
+          description="PDF, DOCX, TXT, Markdown, PNG or JPEG. Maximum 10 MB. Uploaded assets start with unconfirmed usage permission."
           fields={[
             { name: "title", label: "Title (optional)" },
             {

@@ -668,11 +668,23 @@ export function createApp(store: Store, options: AppOptions = {}) {
       const roleId = req.body.roleId || undefined;
       roleInOrg(await store.read(), orgId, roleId);
       const ext = path.extname(f.originalname).toLowerCase();
-      const allowed = [".pdf", ".docx", ".txt", ".png", ".jpg", ".jpeg"];
+      const textTypes: Record<string, string> = {
+        ".txt": "text/plain",
+        ".md": "text/markdown",
+        ".markdown": "text/markdown",
+      };
+      const allowed = [
+        ...Object.keys(textTypes),
+        ".pdf",
+        ".docx",
+        ".png",
+        ".jpg",
+        ".jpeg",
+      ];
       if (!allowed.includes(ext))
         throw new HttpError(
           422,
-          "Use PDF, DOCX, TXT, PNG or JPEG, up to 10 MB.",
+          "Use PDF, DOCX, TXT, Markdown, PNG or JPEG, up to 10 MB.",
         );
       if (process.env.UPLOAD_SCAN_COMMAND) {
         await new Promise<void>((resolve, reject) => {
@@ -744,10 +756,11 @@ export function createApp(store: Store, options: AppOptions = {}) {
         mime =
           "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
         locator = "Document paragraphs";
-      } else if (ext === ".txt") {
+      } else if (textTypes[ext]) {
         if (f.buffer.includes(0))
           throw new HttpError(422, "Binary files cannot be uploaded as text.");
         content = f.buffer.toString("utf8");
+        mime = textTypes[ext];
       } else {
         image = true;
         const png = f.buffer

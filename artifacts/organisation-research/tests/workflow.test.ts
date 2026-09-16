@@ -208,6 +208,24 @@ describe("Evidence and immutable pack workflow", () => {
         .post(url)
         .attach("file", Buffer.from("Shift handover notes."), "notes.txt");
       expect(clean.status).toBe(201);
+      const markdown = await request(app())
+        .post(url)
+        .attach(
+          "file",
+          Buffer.from("# Handover\n\n- Two shift blocks."),
+          "handover.md",
+        );
+      expect(markdown.status).toBe(201);
+      expect(markdown.body.text).toBe("# Handover\n\n- Two shift blocks.");
+      expect(markdown.body.mime).toBe("text/markdown");
+      const binary = await request(app())
+        .post(url)
+        .attach("file", Buffer.from([35, 0, 1]), "handover.md");
+      expect(binary.status).toBe(422);
+      const other = await request(app())
+        .post(url)
+        .attach("file", Buffer.from("x"), "notes.html");
+      expect(other.status).toBe(422);
       const flagged = await request(app())
         .post(url)
         .attach("file", Buffer.from("THREAT-MARKER"), "notes.txt");
