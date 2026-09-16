@@ -28,7 +28,7 @@ Without `DATABASE_URL`, development uses a local PGlite database in `.data/resea
 
 ## Replit configuration
 
-Import this directory as a new project. `.replit` supplies development and VM deployment commands. Build installs dependencies, builds the frontend and runs the design audit. Production serves the frontend and API together on port 5173, mapped to external port 80. An always-running deployment is required for the embedded research worker.
+Import this directory as a new project. `.replit` supplies development and VM deployment commands. Build installs dependencies, builds the frontend and runs the design audit. Production serves the frontend and API together on port 5173, mapped to external port 80. An always-running deployment is required for the embedded research worker. The server trusts exactly one proxy hop (Replit's edge) so the per-client API rate limit (180 requests a minute) is keyed on the real client address; if you ever put another proxy in front of it, adjust the `trust proxy` setting in `server/app.ts`.
 
 Configure Replit Secrets:
 

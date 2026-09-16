@@ -242,6 +242,22 @@ describe("Evidence and immutable pack workflow", () => {
     }
   });
 });
+describe("Proxy awareness", () => {
+  it("rate-limits each forwarded client separately", async () => {
+    const a = app();
+    const from = (ip: string) =>
+      request(a).get("/api/health").set("X-Forwarded-For", ip);
+    const first = await from("203.0.113.5");
+    const other = await from("203.0.113.6");
+    const second = await from("203.0.113.5");
+    expect(first.status).toBe(200);
+    const remaining = (r: request.Response) =>
+      Number(r.headers["ratelimit-remaining"]);
+    expect(remaining(first)).toBe(179);
+    expect(remaining(other)).toBe(179);
+    expect(remaining(second)).toBe(178);
+  });
+});
 describe("Public source network boundary", () => {
   it.each([
     "127.0.0.1",

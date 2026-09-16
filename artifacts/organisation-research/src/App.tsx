@@ -13,11 +13,6 @@ import type {
 import { labels } from "../shared/types";
 import { api, post, patch, download } from "./api";
 import { ResearchWorkspacePage } from "./components/research-workspace-page";
-import {
-  TABLE_CARD_CLASS,
-  TABLE_HEAD_EDGE_CLASS,
-  TABLE_CELL_EDGE_CLASS,
-} from "./components/table-kit";
 import * as U from "./ui";
 import { OrgSuggestions } from "./components/org-suggestions";
 import {
@@ -354,6 +349,8 @@ export function App({
             )
           ? "ready"
           : "draft";
+  // Creating an organisation asks only for its identity; division, summary
+  // and brand notes are added later through "Edit organisation".
   const orgFields = (o?: Organisation): Field[] => [
     {
       name: "name",
@@ -363,7 +360,7 @@ export function App({
     },
     {
       name: "website",
-      label: "Official website",
+      label: "Organisation website",
       value: o?.website,
       hint: "Confirm the correct company website. Leave blank if it is unknown.",
     },
@@ -373,24 +370,28 @@ export function App({
       value: o?.country || "United Kingdom",
       required: true,
     },
-    {
-      name: "division",
-      label: "Division or business unit",
-      value: o?.division,
-    },
-    {
-      name: "summary",
-      label: "Organisation summary",
-      value: o?.summary,
-      kind: "textarea",
-      hint: "A working summary. Evidence-backed employer claims are recorded separately.",
-    },
-    {
-      name: "brandNotes",
-      label: "Brand guidance and asset notes",
-      value: o?.brandNotes,
-      kind: "textarea",
-    },
+    ...(o
+      ? ([
+          {
+            name: "division",
+            label: "Division or business unit",
+            value: o.division,
+          },
+          {
+            name: "summary",
+            label: "Organisation summary",
+            value: o.summary,
+            kind: "textarea",
+            hint: "A working summary. Evidence-backed employer claims are recorded separately.",
+          },
+          {
+            name: "brandNotes",
+            label: "Brand guidance and asset notes",
+            value: o.brandNotes,
+            kind: "textarea",
+          },
+        ] satisfies Field[])
+      : []),
   ];
   const roleFields = (r?: Role): Field[] => [
     { name: "title", label: "Job title", value: r?.title, required: true },
@@ -990,7 +991,6 @@ export function App({
           ))}
         </div>
         <U.DataTable
-          className={TABLE_CARD_CLASS}
           data={organisations}
           getRowId={(r) => r.id}
           defaultPageSize={8}
@@ -1025,8 +1025,6 @@ export function App({
             {
               id: "name",
               header: "Organisation",
-              headerClassName: TABLE_HEAD_EDGE_CLASS,
-              className: TABLE_CELL_EDGE_CLASS,
               accessor: (o) => o.name,
               sortable: true,
               cell: (o) => (

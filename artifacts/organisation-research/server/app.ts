@@ -96,6 +96,11 @@ export function createApp(store: Store, options: AppOptions = {}) {
     throw new Error("Test/preview authentication is forbidden in production.");
   const app = express();
   app.disable("x-powered-by");
+  // The app always sits one hop behind a Replit proxy (the deployment edge in
+  // production, the workspace proxy and Vite in development), which sets
+  // X-Forwarded-For. Trusting that hop lets the rate limiter key on the real
+  // client instead of pooling every user into the proxy's single bucket.
+  app.set("trust proxy", 1);
   // Replit-managed Clerk: in production the Clerk Frontend API is served from
   // this origin under /api/__clerk (no CNAME needed). The proxy streams raw
   // bytes, so it is mounted before rate limiting and body parsing; it is a
