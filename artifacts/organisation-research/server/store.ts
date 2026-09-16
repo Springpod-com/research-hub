@@ -1,5 +1,5 @@
 import { PGlite } from "@electric-sql/pglite";
-import { Pool } from "pg";
+import { Pool, type PoolClient } from "pg";
 import { mkdir } from "node:fs/promises";
 import { emptyWorkspace, type Workspace, type Pack } from "../shared/types.js";
 export interface SQL {
@@ -14,6 +14,13 @@ export class Store {
   static async open(options: { url?: string; path?: string } = {}) {
     if (options.url) {
       const pool = new Pool({ connectionString: options.url, max: 5 });
+      // The database closes idle connections now and then (maintenance,
+      // failover, a compute restart). The pool discards the broken client;
+      // without this listener Node treats the event as fatal and the whole
+      // server exits.
+      pool.on("error", (e) =>
+        console.error(`[store] idle database connection lost: ${e.message}`),
+      );
       return new Store(pool, pool);
     }
     if (options.path) await mkdir(options.path, { recursive: true });
@@ -50,6 +57,16 @@ export class Store {
   async transact<T>(fn: (w: Workspace, db: SQL) => Promise<T> | T): Promise<T> {
     const work = async () => {
       const client = this.pool ? await this.pool.connect() : this.db;
+      // A checked-out client has no error listener of its own, so a
+      // connection the database closes mid-transaction would take the server
+      // down. Record it: the transaction fails through its next query and
+      // the client is returned to the pool as broken rather than reused.
+      const pooled = "release" in client ? (client as PoolClient) : undefined;
+      let lost: Error | undefined;
+      const onLost = (e: Error) => {
+        lost = e;
+      };
+      pooled?.on("error", onLost);
       try {
         await client.query("BEGIN");
         const w = (
@@ -66,10 +83,11 @@ export class Store {
         await client.query("COMMIT");
         return result;
       } catch (e) {
-        await client.query("ROLLBACK");
-        throw e;
+        if (!lost) await client.query("ROLLBACK").catch(() => {});
+        throw lost ?? e;
       } finally {
-        if ("release" in client) (client as any).release();
+        pooled?.removeListener("error", onLost);
+        pooled?.release(lost);
       }
     };
     const next = this.tail.then(work, work);

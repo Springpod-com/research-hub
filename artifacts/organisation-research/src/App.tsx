@@ -15,6 +15,7 @@ import type {
   Activity,
   Pack,
   Session,
+  ResearchJob,
 } from "../shared/types";
 import { labels } from "../shared/types";
 import { api, post, patch, del, download, fetchBlob, ApiError } from "./api";
@@ -26,6 +27,22 @@ import {
   OccupationMatcher,
   type OccupationRecord,
 } from "./components/occupation-matcher";
+import { ResearchDialog } from "./components/research-dialog";
+import {
+  ActiveRunBanner,
+  RunCard,
+  TIER_NAME,
+  isActive,
+  scopeTitle,
+} from "./components/research-runs";
+import { currentRoute, href, splitRoute } from "./route";
+const TABS: [string, string][] = [
+  ["overview", "Overview"],
+  ["roles", "Roles"],
+  ["evidence", "Evidence"],
+  ["questions", "Questions"],
+  ["packs", "Research packs"],
+];
 const date = (s: string) =>
   new Date(s).toLocaleDateString("en-GB", {
     day: "numeric",
@@ -259,19 +276,47 @@ export function App({
     Session & { providers: Record<string, boolean> }
   >();
   const [error, setError] = useState("");
-  const [route, setRoute] = useState(location.hash.slice(1) || "/");
+  const [route, setRoute] = useState(currentRoute);
   const [modal, setModal] = useState<Modal>();
   const [evidence, setEvidence] = useState<Finding>();
   const [source, setSource] = useState<Source>();
   const [matcher, setMatcher] = useState<Role>();
-  const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState("all");
-  const [roleId, setRoleId] = useState("all");
-  const [evidenceMode, setEvidenceMode] = useState("findings");
-  const [tier, setTier] = useState("power");
+  const [cancelling, setCancelling] = useState<ResearchJob>();
   const [busy, setBusy] = useState(false);
-  const nav = (path: string) => {
-    location.hash = path;
+  // The path decides the page; the query string holds the view state (role
+  // scope, search, filters) so Back restores it and a view can be linked to.
+  const [path, query] = splitRoute(route);
+  const nav = (to: string, params?: Record<string, string | undefined>) => {
+    location.hash = href(to, params);
+  };
+  // View-state changes replace the current history entry: typing in a search
+  // box should not create a Back stop per keystroke.
+  const replaceQuery = (next: URLSearchParams) => {
+    const s = next.toString();
+    const hash = `#${path}${s ? `?${s}` : ""}`;
+    history.replaceState(history.state, "", hash);
+    setRoute(hash.slice(1));
+  };
+  const setParam = (key: string, value: string, fallback = "") => {
+    const next = new URLSearchParams(query);
+    if (!value || value === fallback) next.delete(key);
+    else next.set(key, value);
+    replaceQuery(next);
+  };
+  const search = query.get("q") || "";
+  const setSearch = (v: string) => setParam("q", v);
+  const filter = query.get("status") || "all";
+  const setFilter = (v: string) => setParam("status", v, "all");
+  const requestedRole = query.get("role") || "all";
+  const setRoleId = (v: string) => setParam("role", v, "all");
+  const evidenceMode = query.get("view") === "sources" ? "sources" : "findings";
+  const setEvidenceMode = (v: string) => setParam("view", v, "findings");
+  // Clears the search and status filter but keeps the role scope, which is a
+  // deliberate choice of view rather than a filter.
+  const clearFilters = () => {
+    const next = new URLSearchParams(query);
+    for (const k of ["q", "status"]) next.delete(k);
+    replaceQuery(next);
   };
   const unauthorised = useRef(0);
   const reload = async () => {
@@ -302,10 +347,15 @@ export function App({
   };
   useEffect(() => {
     const hash = () => {
-      setRoute(location.hash.slice(1) || "/");
-      setRoleId("all");
-      setFilter("all");
-      setSearch("");
+      setRoute(currentRoute());
+      // Dialogs and panels belong to the page that opened them. Back, or a
+      // typed address, must not leave one open over a different page whose
+      // organisation may no longer be on screen.
+      setModal(undefined);
+      setCancelling(undefined);
+      setEvidence(undefined);
+      setSource(undefined);
+      setMatcher(undefined);
     };
     window.addEventListener("hashchange", hash);
     void reload().catch(failed);
@@ -338,10 +388,49 @@ export function App({
       setBusy(false);
     }
   };
-  const parts = route.split("/").filter(Boolean);
+  const parts = path.split("/").filter(Boolean);
   const org = data?.organisations.find((o) => o.id === parts[1]);
-  const tab = parts[2] || "overview";
+  const tab = TABS.some(([id]) => id === parts[2]) ? parts[2] : "overview";
+  const tabName = TABS.find(([id]) => id === tab)![1];
   const orgRoles = data?.roles.filter((r) => r.orgId === org?.id) || [];
+  // A role scope naming a removed role falls back to the whole organisation.
+  const roleId = orgRoles.some((r) => r.id === requestedRole)
+    ? requestedRole
+    : "all";
+  // ...and the address is corrected to match, so a copied link or Back does
+  // not carry a scope that is not the one shown.
+  useEffect(() => {
+    if (data && org && requestedRole !== "all" && roleId === "all")
+      setParam("role", "");
+  }, [!data, org?.id, requestedRole, roleId]);
+  // Links that keep the current role scope.
+  const orgHref = (
+    nextTab: string,
+    params?: Record<string, string | undefined>,
+  ) =>
+    href(`/org/${org?.id}/${nextTab}`, {
+      role: roleId === "all" ? undefined : roleId,
+      ...params,
+    });
+  const orgJobs = data?.jobs.filter((j) => j.orgId === org?.id) || [];
+  const activeJobs = orgJobs.filter(isActive);
+  useEffect(() => {
+    const page =
+      path === "/settings"
+        ? "Team & settings"
+        : !data
+          ? ""
+          : org
+            ? tab === "overview"
+              ? org.name
+              : `${org.name} · ${tabName}`
+            : parts[0] === "org"
+              ? "Organisation not found"
+              : "Organisations";
+    document.title = page
+      ? `${page} · Organisation Research`
+      : "Organisation Research · Springpod";
+  }, [path, tab, org?.name, !data]);
   const relevant = (x: { orgId: string; roleId?: string }) =>
     x.orgId === org?.id &&
     (roleId === "all" || !x.roleId || x.roleId === roleId);
@@ -359,7 +448,10 @@ export function App({
         p.organisation.id === org?.id &&
         (roleId === "all" || p.role.id === roleId),
     ) || [];
-  const jobs = data?.jobs.filter(relevant).slice().reverse() || [];
+  // Run history is shown for the whole organisation, newest first.
+  const runs = [...orgJobs].sort((a, b) =>
+    b.createdAt.localeCompare(a.createdAt),
+  );
   const roleOptions: [string, string][] = [
     ["all", "All roles"],
     ...orgRoles.map((r) => [r.id, r.title] as [string, string]),
@@ -461,9 +553,12 @@ export function App({
   function renderModal() {
     if (!modal) return null;
     const close = () => setModal(undefined);
-    const save = async (fn: () => Promise<unknown>) => {
+    // Every dialog confirms its save the same way once the workspace has
+    // refreshed; the dialog itself shows any error and stays open.
+    const save = async (fn: () => Promise<unknown>, message: string) => {
       await fn();
       await reload();
+      U.toast({ title: message });
     };
     const m = modal.item;
     if (modal.type === "organisation")
@@ -496,6 +591,9 @@ export function App({
                 })
               : await post("/organisations", v);
             await reload();
+            U.toast({
+              title: m ? "Organisation updated" : "Organisation created",
+            });
             nav(`/org/${created.id}/overview`);
           }}
         />
@@ -508,10 +606,12 @@ export function App({
           fields={roleFields(m)}
           onClose={close}
           onSubmit={async (v) =>
-            save(() =>
-              m
-                ? patch(`/roles/${m.id}`, { ...v, version: m.version })
-                : post(`/organisations/${org!.id}/roles`, v),
+            save(
+              () =>
+                m
+                  ? patch(`/roles/${m.id}`, { ...v, version: m.version })
+                  : post(`/organisations/${org!.id}/roles`, v),
+              m ? "Role updated" : "Role added",
             )
           }
         />
@@ -649,11 +749,13 @@ export function App({
           ]}
           onClose={close}
           onSubmit={async (v) =>
-            save(() =>
-              post(`/organisations/${org!.id}/sources`, {
-                ...v,
-                roleIds: v.roleId === "all" ? [] : [v.roleId],
-              }),
+            save(
+              () =>
+                post(`/organisations/${org!.id}/sources`, {
+                  ...v,
+                  roleIds: v.roleId === "all" ? [] : [v.roleId],
+                }),
+              "Source recorded",
             )
           }
         />
@@ -670,11 +772,13 @@ export function App({
           onClose={close}
           submitLabel="Capture source"
           onSubmit={async (v) =>
-            save(() =>
-              post(`/organisations/${org!.id}/web-source`, {
-                url: v.url,
-                roleId: v.roleId === "all" ? undefined : v.roleId,
-              }),
+            save(
+              () =>
+                post(`/organisations/${org!.id}/web-source`, {
+                  url: v.url,
+                  roleId: v.roleId === "all" ? undefined : v.roleId,
+                }),
+              "Page captured",
             )
           }
         />
@@ -709,11 +813,13 @@ export function App({
             form.append("title", v.title);
             form.append("caption", v.caption);
             if (v.roleId !== "all") form.append("roleId", v.roleId);
-            await save(() =>
-              api(`/organisations/${org!.id}/upload`, {
-                method: "POST",
-                body: form,
-              }),
+            await save(
+              () =>
+                api(`/organisations/${org!.id}/upload`, {
+                  method: "POST",
+                  body: form,
+                }),
+              "File uploaded",
             );
           }}
         />
@@ -804,22 +910,24 @@ export function App({
               throw new Error(
                 `Paste the exact supporting passage from “${source.title}”.`,
               );
-            await save(() =>
-              post(`/organisations/${org!.id}/findings`, {
-                claim: v.claim,
-                kind: v.kind,
-                rationale: v.rationale,
-                roleId: v.roleId === "all" ? undefined : v.roleId,
-                citations: source
-                  ? [
-                      {
-                        sourceId: source.id,
-                        quote: v.quote,
-                        locator: v.locator,
-                      },
-                    ]
-                  : [],
-              }),
+            await save(
+              () =>
+                post(`/organisations/${org!.id}/findings`, {
+                  claim: v.claim,
+                  kind: v.kind,
+                  rationale: v.rationale,
+                  roleId: v.roleId === "all" ? undefined : v.roleId,
+                  citations: source
+                    ? [
+                        {
+                          sourceId: source.id,
+                          quote: v.quote,
+                          locator: v.locator,
+                        },
+                      ]
+                    : [],
+                }),
+              "Finding recorded",
             );
           }}
         />
@@ -886,14 +994,16 @@ export function App({
           }
           onClose={close}
           onSubmit={async (v) =>
-            save(() =>
-              m
-                ? patch(`/questions/${m.id}`, { ...v, version: m.version })
-                : post(`/organisations/${org!.id}/questions`, {
-                    ...v,
-                    blocking: v.blocking === "true",
-                    roleId: v.roleId === "all" ? undefined : v.roleId,
-                  }),
+            save(
+              () =>
+                m
+                  ? patch(`/questions/${m.id}`, { ...v, version: m.version })
+                  : post(`/organisations/${org!.id}/questions`, {
+                      ...v,
+                      blocking: v.blocking === "true",
+                      roleId: v.roleId === "all" ? undefined : v.roleId,
+                    }),
+              m ? "Question updated" : "Question added",
             )
           }
         />
@@ -965,15 +1075,17 @@ export function App({
           ]}
           onClose={close}
           onSubmit={async (v) =>
-            save(() =>
-              post(`/roles/${m.id}/occupations`, {
-                ...v,
-                version: m.version,
-                activities: v.activities.split("\n").filter(Boolean),
-                skills: v.skills.split("\n").filter(Boolean),
-                knowledge: v.knowledge.split("\n").filter(Boolean),
-                workContext: v.workContext.split("\n").filter(Boolean),
-              }),
+            save(
+              () =>
+                post(`/roles/${m.id}/occupations`, {
+                  ...v,
+                  version: m.version,
+                  activities: v.activities.split("\n").filter(Boolean),
+                  skills: v.skills.split("\n").filter(Boolean),
+                  knowledge: v.knowledge.split("\n").filter(Boolean),
+                  workContext: v.workContext.split("\n").filter(Boolean),
+                }),
+              "Occupational match recorded",
             )
           }
         />
@@ -1020,7 +1132,10 @@ export function App({
           ]}
           onClose={close}
           onSubmit={async (v) =>
-            save(() => post("/members", { ...v, active: v.active === "true" }))
+            save(
+              () => post("/members", { ...v, active: v.active === "true" }),
+              "Team access saved",
+            )
           }
         />
       );
@@ -1033,7 +1148,27 @@ export function App({
           initialRole={roleId === "all" ? orgRoles[0]?.id : roleId}
           canReady={session?.role !== "researcher"}
           onClose={close}
-          onSaved={reload}
+          onSaved={async () => {
+            await reload();
+            U.toast({ title: "Snapshot created" });
+          }}
+        />
+      );
+    if (modal.type === "research")
+      return (
+        <ResearchDialog
+          org={org!}
+          roles={orgRoles}
+          jobs={data?.jobs || []}
+          sources={(data?.sources || []).filter(
+            (x) => x.orgId === org!.id && x.text && !x.error,
+          )}
+          tiers={session?.providers || {}}
+          initialRoleId={roleId === "all" ? undefined : roleId}
+          onClose={close}
+          onStart={async (tier, scopeRoleId) => {
+            await startResearch(tier, scopeRoleId);
+          }}
         />
       );
     return null;
@@ -1199,41 +1334,70 @@ export function App({
             },
           ]}
           empty={
-            <Empty
-              title="Your research starts here"
-              description="Create an organisation to bring together employer evidence, role research and questions for the client."
-              action={
-                <U.Button
-                  variant="outline"
-                  onClick={() => setModal({ type: "organisation" })}
-                >
-                  Create your first organisation
-                </U.Button>
-              }
-            />
+            data?.organisations.length ? (
+              <Empty
+                title="No organisations match"
+                description={
+                  search
+                    ? `Nothing matches “${search}”${filter === "all" ? "" : " with that status"}.`
+                    : "No organisations have that research status."
+                }
+                action={
+                  <U.Button variant="outline" onClick={clearFilters}>
+                    Clear search and filters
+                  </U.Button>
+                }
+              />
+            ) : (
+              <Empty
+                title="Your research starts here"
+                description="Create an organisation to bring together employer evidence, role research and questions for the client."
+                action={
+                  <U.Button
+                    variant="outline"
+                    onClick={() => setModal({ type: "organisation" })}
+                  >
+                    Create your first organisation
+                  </U.Button>
+                }
+              />
+            )
           }
         />
       </>
     );
   };
   const researchButton = (
-    <U.Button
-      disabled={busy}
-      onClick={() =>
-        void run(
-          () =>
-            post(`/organisations/${org!.id}/research`, {
-              tier,
-              roleId: roleId === "all" ? undefined : roleId,
-            }),
-          "Research queued",
-        )
-      }
-    >
+    <U.Button disabled={busy} onClick={() => setModal({ type: "research" })}>
       <U.IconMagicWand size={20} />
       Start research
     </U.Button>
   );
+  const startResearch = async (tier: string, scopeRoleId?: string) => {
+    const job: ResearchJob = await post(`/organisations/${org!.id}/research`, {
+      tier,
+      roleId: scopeRoleId,
+    });
+    await reload();
+    U.toast({
+      title: "Research started",
+      description: "Progress is shown at the top of the page as it runs.",
+    });
+    return job;
+  };
+  const cancelRun = async (j: ResearchJob) => {
+    setCancelling(undefined);
+    await run(() => post(`/jobs/${j.id}/cancel`, {}), "Run cancelled");
+  };
+  const retryRun = (j: ResearchJob) =>
+    run(
+      () =>
+        post(`/organisations/${org!.id}/research`, {
+          tier: j.tier,
+          roleId: j.roleId,
+        }),
+      "Research started again",
+    );
   function renderOverview() {
     const o = org!;
     const orgSources = data?.sources.filter((x) => x.orgId === o.id) || [];
@@ -1458,9 +1622,7 @@ export function App({
                   <U.Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => {
-                      nav(`/org/${org!.id}/roles`);
-                    }}
+                    onClick={() => nav(`/org/${org!.id}/roles`, { role: r.id })}
                   >
                     View role research
                     <U.IconArrowRight size={16} />
@@ -1485,7 +1647,7 @@ export function App({
             />
           </U.Card>
         )}
-        <U.Card>
+        <U.Card id="research-runs">
           <U.CardHeader>
             <U.CardTitle>Research runs</U.CardTitle>
             <U.CardDescription>
@@ -1493,69 +1655,58 @@ export function App({
             </U.CardDescription>
           </U.CardHeader>
           <U.CardContent>
-            {!jobs.length ? (
-              <p className="text-p4 text-muted-foreground">
-                No research runs yet. Add materials or start from the official
-                website.
-              </p>
+            {!runs.length ? (
+              <Empty
+                title="No research runs yet"
+                description="Research reads the organisation website and captured sources, then drafts findings and questions for review."
+                action={
+                  <U.Button
+                    variant="outline"
+                    onClick={() => setModal({ type: "research" })}
+                  >
+                    <U.IconMagicWand size={20} />
+                    Start research
+                  </U.Button>
+                }
+              />
             ) : (
               <div className="space-y-4">
-                {jobs.map((j) => (
-                  <div
-                    key={j.id}
-                    className="border border-border rounded-xl p-4 space-y-3"
-                  >
-                    <div className="flex flex-wrap gap-3 justify-between">
-                      <div>
-                        <p className="text-p3 font-medium">
-                          {j.roleId
-                            ? orgRoles.find((r) => r.id === j.roleId)?.title
-                            : "Organisation research"}
-                        </p>
-                        <p className="text-p5 text-muted-foreground">
-                          {j.stage} · {date(j.createdAt)}
-                          {j.promptVersion
-                            ? ` · prompt v${j.promptVersion}`
-                            : ""}
-                        </p>
-                      </div>
-                      <Status value={j.status} />
-                    </div>
-                    {j.runs.map((r) => (
-                      <p key={r.id} className="text-p5">
-                        {r.model}: {r.status} · {r.findings} findings ·{" "}
-                        {r.inputTokens + r.outputTokens} tokens
-                      </p>
-                    ))}
-                    {j.errors.length > 0 && (
-                      <details>
-                        <summary className="text-p4 cursor-pointer">
-                          {j.errors.length} research limitations
-                        </summary>
-                        <ul className="text-p5 space-y-2 mt-3 list-disc pl-5">
-                          {j.errors.map((e, i) => (
-                            <li key={i}>{e}</li>
-                          ))}
-                        </ul>
-                      </details>
-                    )}
-                    {["queued", "researching"].includes(j.status) && (
-                      <U.Button
-                        variant="outline"
-                        size="sm"
-                        disabled={busy}
-                        onClick={() =>
-                          void run(
-                            () => post(`/jobs/${j.id}/cancel`, {}),
-                            "Run cancelled",
-                          )
-                        }
-                      >
-                        Cancel run
-                      </U.Button>
-                    )}
-                  </div>
-                ))}
+                {runs.map((j, i) => {
+                  const card = (
+                    <RunCard
+                      job={j}
+                      roles={orgRoles}
+                      badge={<Status value={j.status} />}
+                      busy={busy}
+                      onCancel={() => setCancelling(j)}
+                      onRetry={() => void retryRun(j)}
+                    />
+                  );
+                  // Live and the latest run are shown in full; older runs
+                  // collapse to one line so the history stays scannable.
+                  return isActive(j) || i === 0 ? (
+                    <div key={j.id}>{card}</div>
+                  ) : (
+                    <details key={j.id} className="group">
+                      <summary className="cursor-pointer flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border px-4 py-3 group-open:mb-2">
+                        <span className="text-p4">
+                          {scopeTitle(j, orgRoles)} · {date(j.createdAt)} ·{" "}
+                          {TIER_NAME[j.tier]}
+                        </span>
+                        <span className="flex items-center gap-3">
+                          <Status value={j.status} />
+                          <span className="text-p5 text-muted-foreground">
+                            <span className="group-open:hidden">Details</span>
+                            <span className="hidden group-open:inline">
+                              Hide
+                            </span>
+                          </span>
+                        </span>
+                      </summary>
+                      {card}
+                    </details>
+                  );
+                })}
               </div>
             )}
           </U.CardContent>
@@ -1564,6 +1715,13 @@ export function App({
     );
   }
   function renderEvidence() {
+    const shownFindings = findings.filter(
+      (f) =>
+        (filter === "all" || f.review === filter) &&
+        f.claim.toLowerCase().includes(search.toLowerCase()),
+    );
+    const orgHasFindings = data?.findings.some((f) => f.orgId === org?.id);
+    const orgHasSources = data?.sources.some((x) => x.orgId === org?.id);
     return (
       <div className="space-y-6">
         <div className="flex flex-col sm:flex-row justify-between gap-4">
@@ -1671,10 +1829,25 @@ export function App({
                 },
               ]}
               empty={
-                <Empty
-                  title="Bring your sources together"
-                  description="Capture a public page, upload a document or photo, or record what the client has told you. Each source stays linked to its findings."
-                />
+                roleId !== "all" && orgHasSources ? (
+                  <Empty
+                    title="No sources for this role"
+                    description="Sources linked to other roles are hidden by the role scope."
+                    action={
+                      <U.Button
+                        variant="outline"
+                        onClick={() => setRoleId("all")}
+                      >
+                        Show all roles
+                      </U.Button>
+                    }
+                  />
+                ) : (
+                  <Empty
+                    title="Bring your sources together"
+                    description="Capture a public page, upload a document or photo, or record what the client has told you. Each source stays linked to its findings."
+                  />
+                )
               }
             />
           </>
@@ -1704,68 +1877,91 @@ export function App({
               </div>
             </div>
             <div className="space-y-3">
-              {findings
-                .filter(
-                  (f) =>
-                    (filter === "all" || f.review === filter) &&
-                    f.claim.toLowerCase().includes(search.toLowerCase()),
-                )
-                .map((f) => (
-                  <U.Card key={f.id}>
-                    <U.CardContent className="p-5">
-                      <div className="flex flex-wrap gap-2 mb-3">
-                        <U.Badge variant="outline">{labels[f.kind]}</U.Badge>
-                        <Status value={f.review} />
-                        {sourceChanged(f) && (
-                          <U.Badge variant="destructive">
-                            Source changed — re-review
-                          </U.Badge>
-                        )}
-                        {f.runIds.length > 1 && (
-                          <U.Badge variant="outline">
-                            Found in {f.runIds.length} runs
-                          </U.Badge>
-                        )}
-                      </div>
-                      <p className="text-p3 font-medium">{f.claim}</p>
-                      {f.citations[0] && (
-                        <blockquote className="border-l-2 border-brand-teal pl-4 mt-4 text-p4 text-muted-foreground line-clamp-2">
-                          “{f.citations[0].quote}”
-                        </blockquote>
+              {shownFindings.map((f) => (
+                <U.Card key={f.id}>
+                  <U.CardContent className="p-5">
+                    <div className="flex flex-wrap gap-2 mb-3">
+                      <U.Badge variant="outline">{labels[f.kind]}</U.Badge>
+                      <Status value={f.review} />
+                      {sourceChanged(f) && (
+                        <U.Badge variant="destructive">
+                          Source changed — re-review
+                        </U.Badge>
                       )}
-                      <div className="flex flex-wrap justify-between items-center gap-3 mt-4">
-                        <span className="text-p5 text-muted-foreground">
-                          {f.citations.length} evidence reference
-                          {f.citations.length === 1 ? "" : "s"} ·{" "}
-                          {date(f.updatedAt)}
-                        </span>
-                        <U.Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setEvidence(f)}
-                        >
-                          Inspect & review
-                          <U.IconArrowRight size={16} />
-                        </U.Button>
-                      </div>
-                    </U.CardContent>
-                  </U.Card>
-                ))}
+                      {f.runIds.length > 1 && (
+                        <U.Badge variant="outline">
+                          Found in {f.runIds.length} runs
+                        </U.Badge>
+                      )}
+                    </div>
+                    <p className="text-p3 font-medium">{f.claim}</p>
+                    {f.citations[0] && (
+                      <blockquote className="border-l-2 border-brand-teal pl-4 mt-4 text-p4 text-muted-foreground line-clamp-2">
+                        “{f.citations[0].quote}”
+                      </blockquote>
+                    )}
+                    <div className="flex flex-wrap justify-between items-center gap-3 mt-4">
+                      <span className="text-p5 text-muted-foreground">
+                        {f.citations.length} evidence reference
+                        {f.citations.length === 1 ? "" : "s"} ·{" "}
+                        {date(f.updatedAt)}
+                      </span>
+                      <U.Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setEvidence(f)}
+                      >
+                        Inspect & review
+                        <U.IconArrowRight size={16} />
+                      </U.Button>
+                    </div>
+                  </U.CardContent>
+                </U.Card>
+              ))}
             </div>
-            {!findings.length && (
+            {!shownFindings.length && (
               <U.Card>
-                <Empty
-                  title="Evidence comes before the story"
-                  description="Add source material, then run research or record a finding yourself. Every factual claim needs an exact supporting passage."
-                  action={
-                    <U.Button
-                      variant="outline"
-                      onClick={() => setEvidenceMode("sources")}
-                    >
-                      Add source material
-                    </U.Button>
-                  }
-                />
+                {findings.length ? (
+                  <Empty
+                    title="No findings match"
+                    description={
+                      search
+                        ? `Nothing matches “${search}”${filter === "all" ? "" : " in that review state"}.`
+                        : `No findings are ${labels[filter]?.toLowerCase() || "in that state"}${roleId === "all" ? "" : " for this role"}.`
+                    }
+                    action={
+                      <U.Button variant="outline" onClick={clearFilters}>
+                        Clear filters
+                      </U.Button>
+                    }
+                  />
+                ) : roleId !== "all" && orgHasFindings ? (
+                  <Empty
+                    title="No findings for this role"
+                    description="Findings recorded for other roles or for the whole organisation are hidden by the role scope."
+                    action={
+                      <U.Button
+                        variant="outline"
+                        onClick={() => setRoleId("all")}
+                      >
+                        Show all roles
+                      </U.Button>
+                    }
+                  />
+                ) : (
+                  <Empty
+                    title="Evidence comes before the story"
+                    description="Add source material, then run research or record a finding yourself. Every factual claim needs an exact supporting passage."
+                    action={
+                      <U.Button
+                        variant="outline"
+                        onClick={() => setEvidenceMode("sources")}
+                      >
+                        Add source material
+                      </U.Button>
+                    }
+                  />
+                )}
               </U.Card>
             )}
           </>
@@ -2114,10 +2310,23 @@ export function App({
         ))}
         {!questions.length && (
           <U.Card>
-            <Empty
-              title="No unanswered questions recorded"
-              description="When something is uncertain, capture the question and explain which design decision it affects."
-            />
+            {roleId !== "all" &&
+            data?.questions.some((q) => q.orgId === org?.id) ? (
+              <Empty
+                title="No questions for this role"
+                description="Questions for other roles or for the whole organisation are hidden by the role scope."
+                action={
+                  <U.Button variant="outline" onClick={() => setRoleId("all")}>
+                    Show all roles
+                  </U.Button>
+                }
+              />
+            ) : (
+              <Empty
+                title="No questions recorded"
+                description="When something is uncertain, capture the question and explain which design decision it affects."
+              />
+            )}
           </U.Card>
         )}
       </div>
@@ -2224,10 +2433,23 @@ export function App({
         ))}
         {!packs.length && (
           <U.Card>
-            <Empty
-              title="Your research, ready to hand over"
-              description="Create a draft snapshot at any point. A reviewer can mark a pack ready after the evidence review is complete."
-            />
+            {roleId !== "all" &&
+            data?.packs.some((p) => p.organisation.id === org?.id) ? (
+              <Empty
+                title="No packs for this role"
+                description="Packs created for other roles are hidden by the role scope."
+                action={
+                  <U.Button variant="outline" onClick={() => setRoleId("all")}>
+                    Show all roles
+                  </U.Button>
+                }
+              />
+            ) : (
+              <Empty
+                title="Your research, ready to hand over"
+                description="Create a draft snapshot at any point. A reviewer can mark a pack ready after the evidence review is complete."
+              />
+            )}
           </U.Card>
         )}
       </div>
@@ -2237,7 +2459,7 @@ export function App({
     <>
       {pageHeading(
         "Workspace",
-        "Team & connections",
+        "Team & settings",
         "Team access, research connections and the research prompt. Access is managed independently from Employer Intelligence.",
       )}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -2306,8 +2528,13 @@ export function App({
             </a>
           }
         >
-          <U.Button variant="ghost" size="sm" onClick={() => nav("/settings")}>
-            Team
+          <U.Button
+            variant="ghost"
+            size="icon"
+            aria-label="Team and settings"
+            onClick={() => nav("/settings")}
+          >
+            <U.IconSettings size={20} />
           </U.Button>
           {accountControl}
         </U.MobileNavbar>
@@ -2351,13 +2578,13 @@ export function App({
               <U.SidebarNavItem
                 icon={<U.IconCompany size={20} />}
                 label="Organisations"
-                active={route !== "/settings"}
+                active={path !== "/settings"}
                 onClick={() => nav("/")}
               />
               <U.SidebarNavItem
                 icon={<U.IconSettings size={20} />}
-                label="Team & connections"
-                active={route === "/settings"}
+                label="Team & settings"
+                active={path === "/settings"}
                 onClick={() => nav("/settings")}
               />
             </U.SidebarNavSection>
@@ -2407,7 +2634,7 @@ export function App({
                   <U.Skeleton className="h-16 w-1/2" />
                   <U.Skeleton className="h-72 w-full" />
                 </div>
-              ) : route === "/settings" ? (
+              ) : path === "/settings" ? (
                 renderSettings()
               ) : parts[0] === "org" && !org ? (
                 <Empty
@@ -2421,15 +2648,29 @@ export function App({
                 />
               ) : org ? (
                 <>
-                  <U.Button
-                    variant="ghost"
-                    size="sm"
-                    className="mb-5 self-start"
-                    onClick={() => nav("/")}
-                  >
-                    <U.IconArrowLeft size={16} />
-                    Organisations
-                  </U.Button>
+                  <U.Breadcrumb className="mb-5">
+                    <U.BreadcrumbList>
+                      <U.BreadcrumbItem>
+                        <U.BreadcrumbLink href="#/">
+                          Organisations
+                        </U.BreadcrumbLink>
+                      </U.BreadcrumbItem>
+                      <U.BreadcrumbItem>
+                        {tab === "overview" ? (
+                          <U.BreadcrumbPage>{org.name}</U.BreadcrumbPage>
+                        ) : (
+                          <U.BreadcrumbLink href={orgHref("overview")}>
+                            {org.name}
+                          </U.BreadcrumbLink>
+                        )}
+                      </U.BreadcrumbItem>
+                      {tab !== "overview" && (
+                        <U.BreadcrumbItem>
+                          <U.BreadcrumbPage>{tabName}</U.BreadcrumbPage>
+                        </U.BreadcrumbItem>
+                      )}
+                    </U.BreadcrumbList>
+                  </U.Breadcrumb>
                   <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-5 mb-6">
                     <div className="flex items-center gap-4">
                       <U.PartnerAvatar
@@ -2449,66 +2690,87 @@ export function App({
                         </p>
                       </div>
                     </div>
-                    <div className="flex flex-col sm:flex-row gap-3">
-                      <div className="sm:w-44">
-                        <Pick
-                          label="Research tier"
-                          value={tier}
-                          onChange={setTier}
-                          options={[
-                            ["economy", "Economy"],
-                            ["power", "Power"],
-                            ["max", "Max · dual analysis"],
-                          ]}
-                        />
-                      </div>
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                      {activeJobs.length > 0 && (
+                        <U.Badge
+                          variant="outline"
+                          className="inline-flex items-center gap-2 self-start sm:self-auto"
+                        >
+                          <U.Spinner className="size-3" />
+                          {activeJobs.length === 1
+                            ? "Researching"
+                            : `${activeJobs.length} runs in progress`}
+                        </U.Badge>
+                      )}
                       {researchButton}
                     </div>
                   </div>
+                  <ActiveRunBanner
+                    jobs={activeJobs}
+                    roles={orgRoles}
+                    busy={busy}
+                    onView={() => {
+                      nav(`/org/${org.id}/overview`);
+                      setTimeout(
+                        () =>
+                          document
+                            .getElementById("research-runs")
+                            ?.scrollIntoView({ behavior: "smooth" }),
+                        50,
+                      );
+                    }}
+                    onCancel={setCancelling}
+                  />
                   <U.PartnerTabs
                     value={tab}
-                    onValueChange={(v) => nav(`/org/${org.id}/${v}`)}
+                    onValueChange={(v) =>
+                      nav(`/org/${org.id}/${v}`, {
+                        role: roleId === "all" ? undefined : roleId,
+                      })
+                    }
                   >
                     <U.PartnerTabsList className="w-full justify-start overflow-x-auto mb-6">
-                      {[
-                        ["overview", "Overview"],
-                        ["roles", "Roles"],
-                        ["evidence", "Evidence"],
-                        ["questions", "Questions"],
-                        ["packs", "Research packs"],
-                      ].map(([id, name]) => (
+                      {TABS.map(([id, name]) => (
                         <U.PartnerTabsTrigger key={id} value={id}>
                           {name}
                         </U.PartnerTabsTrigger>
                       ))}
                     </U.PartnerTabsList>
-                    <div className="flex flex-wrap gap-3 justify-between items-center mb-6">
-                      <div className="w-full sm:w-64">
-                        <Pick
-                          label="Role scope"
-                          value={roleId}
-                          onChange={setRoleId}
-                          options={roleOptions}
-                        />
+                    {tab !== "overview" && (
+                      <div className="flex flex-wrap gap-3 justify-between items-center mb-6">
+                        <div className="w-full sm:w-64">
+                          <Pick
+                            label="Role scope"
+                            value={roleId}
+                            onChange={setRoleId}
+                            options={roleOptions}
+                          />
+                        </div>
+                        <div className="flex flex-wrap gap-2 text-p5 text-muted-foreground">
+                          <a
+                            className="underline underline-offset-4 hover:text-foreground"
+                            href={orgHref("evidence", { status: "accepted" })}
+                          >
+                            {
+                              findings.filter((f) => f.review === "accepted")
+                                .length
+                            }{" "}
+                            accepted findings
+                          </a>
+                          <span aria-hidden="true">·</span>
+                          <a
+                            className="underline underline-offset-4 hover:text-foreground"
+                            href={orgHref("questions")}
+                          >
+                            {
+                              questions.filter((q) => q.status !== "answered")
+                                .length
+                            }{" "}
+                            open questions
+                          </a>
+                        </div>
                       </div>
-                      <div className="flex flex-wrap gap-2 text-p5 text-muted-foreground">
-                        <span>
-                          {
-                            findings.filter((f) => f.review === "accepted")
-                              .length
-                          }{" "}
-                          accepted findings
-                        </span>
-                        <span>·</span>
-                        <span>
-                          {
-                            questions.filter((q) => q.status !== "answered")
-                              .length
-                          }{" "}
-                          open questions
-                        </span>
-                      </div>
-                    </div>
+                    )}
                     <U.PartnerTabsContent value="overview">
                       {renderOverview()}
                     </U.PartnerTabsContent>
@@ -2534,6 +2796,32 @@ export function App({
         </U.AppShellMain>
       </U.AppShellBody>
       {renderModal()}
+      {cancelling && (
+        <U.AlertDialog
+          open
+          onOpenChange={(v) => {
+            if (!v) setCancelling(undefined);
+          }}
+        >
+          <U.AlertDialogContent>
+            <U.AlertDialogHeader>
+              <U.AlertDialogTitle>Cancel this research run?</U.AlertDialogTitle>
+              <U.AlertDialogDescription>
+                {scopeTitle(cancelling, orgRoles)} ·{" "}
+                {TIER_NAME[cancelling.tier]}. Evidence already extracted is
+                kept, but the run cannot be resumed; you can start a new one
+                later.
+              </U.AlertDialogDescription>
+            </U.AlertDialogHeader>
+            <U.AlertDialogFooter>
+              <U.AlertDialogCancel>Keep running</U.AlertDialogCancel>
+              <U.AlertDialogAction onClick={() => void cancelRun(cancelling)}>
+                Cancel run
+              </U.AlertDialogAction>
+            </U.AlertDialogFooter>
+          </U.AlertDialogContent>
+        </U.AlertDialog>
+      )}
       {evidence && data && (
         <EvidencePanel
           // Display follows the live record (a refresh may flag it while
@@ -2549,6 +2837,7 @@ export function App({
             });
             await reload();
             setEvidence(undefined);
+            U.toast({ title: "Review saved" });
           }}
         />
       )}
@@ -2595,6 +2884,7 @@ export function App({
             });
             await reload();
             setSource(undefined);
+            U.toast({ title: "Source updated" });
           }}
         />
       )}

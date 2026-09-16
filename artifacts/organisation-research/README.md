@@ -22,7 +22,7 @@ Try Northstar Logistics → Evidence → Inspect & review → Accept for draftin
 1. Copy `.env.example` to `.env` and configure the new Clerk application and approved origins. Never put secrets in a `VITE_` variable.
 2. Set `BOOTSTRAP_ADMIN_IDS` to the stable Clerk user ID of the initial administrator.
 3. Run `npm run dev`. The browser uses port 5173; the private API uses 3001.
-4. Sign in, then use Team & connections to add approved Clerk user IDs and application roles. Clerk identity alone does not grant access.
+4. Sign in, then use Team & settings to add approved Clerk user IDs and application roles. Clerk identity alone does not grant access.
 
 Without `DATABASE_URL`, development uses a local PGlite database in `.data/research`. Production requires a new PostgreSQL database plus `DATABASE_CONFIRMED_STANDALONE=true`. The application initialises its own two tables and immutability trigger. Never point it at Employer Intelligence or a shared production database.
 
@@ -40,7 +40,7 @@ Configure Replit Secrets:
 | `APP_ORIGINS` | Optional. Comma-separated exact allowed HTTPS origins, without trailing slashes; defaults to the Replit deployment/development domains |
 | `BOOTSTRAP_ADMIN_EMAILS` | Verified primary email address(es) of the initial administrator(s); `BOOTSTRAP_ADMIN_IDS` (Clerk user IDs) also works. Remove after provisioning |
 | `AI_INTEGRATIONS_*` | Replit AI-integration proxy keys/base URLs for Gemini, Anthropic and OpenAI (managed by Replit) |
-| `ECONOMY_MODEL`, `POWER_MODEL`, `MAX_CLAUDE_MODEL`, `MAX_OPENAI_MODEL` | Exact API model IDs, chosen by the owner. These are the defaults; an administrator can override each one from Team & connections (see below) |
+| `ECONOMY_MODEL`, `POWER_MODEL`, `MAX_CLAUDE_MODEL`, `MAX_OPENAI_MODEL` | Exact API model IDs, chosen by the owner. These are the defaults; an administrator can override each one from Team & settings (see below) |
 | `UPLOAD_SCAN_COMMAND` | Production only: `scripts/clamav/scan-upload.sh` (in-project ClamAV; `CLAMAV_SIDECAR`, `CLAMAV_RUN_DIR`, `CLAMAV_DB_DIR` tune the sidecar) |
 | `OCCUPATION_DATA_DIR` | Optional. Directory of the bundled occupational datasets (defaults to `data/occupations`) |
 
@@ -48,7 +48,7 @@ Model IDs deliberately have no guessed defaults. Choose exact IDs available to t
 
 ### Research connections and the research prompt
 
-**Team & connections** shows the four model positions behind the research tiers (Economy → Gemini, Power → Claude, Max → one Claude and one OpenAI analysis of the same captured sources), the model each one currently uses and where that value comes from (the environment variable, or an override saved in this workspace). Administrators can change a model: pick from the list of models the Replit AI integrations documented as available, or type any exact model ID. The provider prefix must match the position (a `gpt-…` ID cannot be saved for the Claude position), and the server sends one short live request to the chosen model before saving anything, so a mistyped or unavailable ID is refused rather than discovered during a research run. "Use environment default" removes the override. Every change is written to the audit log. Overrides live in the workspace record (`settings.models`); the environment variables remain the defaults for a new workspace.
+**Team & settings** shows the four model positions behind the research tiers (Economy → Gemini, Power → Claude, Max → one Claude and one OpenAI analysis of the same captured sources), the model each one currently uses and where that value comes from (the environment variable, or an override saved in this workspace). Administrators can change a model: pick from the list of models the Replit AI integrations documented as available, or type any exact model ID. The provider prefix must match the position (a `gpt-…` ID cannot be saved for the Claude position), and the server sends one short live request to the chosen model before saving anything, so a mistyped or unavailable ID is refused rather than discovered during a research run. "Use environment default" removes the override. Every change is written to the audit log. Overrides live in the workspace record (`settings.models`); the environment variables remain the defaults for a new workspace.
 
 The same page shows the research prompt: the instructions every run sends before the evidence. Anyone can read them; administrators can edit them, save a new version or reset to the built-in default. The output contract (the JSON shape the worker parses) and the evidence framing are fixed and appended by the server, and are shown read-only below the editor. The prompt has a monotonic version (0 is the built-in default); each research run records the version it used (`promptVersion`), and a save is refused with 409 if someone else changed the prompt since the page was opened.
 

@@ -14,3 +14,7 @@ Dialog flows can be driven with the workspace's own Playwright package (import i
 Create a throwaway user with Clerk's Backend API using a `+clerk_test@` email (any password, `skipPasswordChecks`), add it as an active member through the app's own `Store.transact` (dev `DATABASE_URL`), and drive Playwright at `https://$REPLIT_DEV_DOMAIN` — not 127.0.0.1, which is not an authorized party, so every API call would be 401. After the password Clerk asks a new device for an email code; test accounts accept `424242`. Delete the user, its membership, its audit rows and any created organisations afterwards (organisations have no delete endpoint).
 **Why:** the fixture preview server cannot exercise Clerk cookie renewal, and the owner's own account must not be signed into.
 **How to apply:** deleting the `__session` cookie proves nothing — ClerkJS rewrites it from its cached token every ~5 s; to test the 401 recovery path, fulfil one poll with a 401 via `page.route` and expect exactly one Clerk `/tokens` request and no error on screen.
+
+## Screenshotting research-run states (verified 2026-09-16)
+
+The fixture workspace has no research jobs, so run states cannot be screenshotted from the stock preview server; seed hand-built jobs in a throwaway copy of the preview server (they never run — the preview has no worker — which is what makes a live "researching" state observable). A tsx script kept under /tmp must use the `.mts` extension: with `.ts` it is compiled as CommonJS (no `"type": "module"` above /tmp) and top-level `await` fails.
