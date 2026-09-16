@@ -13,11 +13,12 @@ import {
   SpringpodLogo,
   Alert,
   AlertDescription,
+  Skeleton,
 } from "./ui";
 import "./index.css";
 function Authenticated() {
   const { isLoaded, isSignedIn } = useAuth();
-  if (!isLoaded) return <Setup title="Checking your session" />;
+  if (!isLoaded) return <Loading />;
   if (!isSignedIn)
     return (
       <div className="min-h-dvh bg-background flex flex-col gap-8 items-center justify-center p-6">
@@ -31,6 +32,21 @@ function Authenticated() {
     );
   return <App accountControl={<UserButton />} />;
 }
+/** Shown only while configuration and the session are being fetched. */
+function Loading() {
+  return (
+    <main
+      className="min-h-dvh bg-background flex flex-col items-center justify-center gap-6 p-6"
+      aria-busy="true"
+      aria-live="polite"
+    >
+      <SpringpodLogo className="w-40" />
+      <Skeleton className="h-4 w-48" />
+      <p className="text-p4 text-muted-foreground">Loading…</p>
+    </main>
+  );
+}
+/** Shown when the workspace cannot be opened until an administrator acts. */
 function Setup({ title, error }: { title: string; error?: string }) {
   return (
     <main className="min-h-dvh bg-background flex items-center justify-center p-6">
@@ -70,7 +86,7 @@ function Root() {
       .catch((e) => setError(e.message));
   }, []);
   if (error) return <Setup title="Could not connect" error={error} />;
-  if (!config) return <Setup title="Opening your workspace" />;
+  if (!config) return <Loading />;
   if (config.preview) return <App preview />;
   if (!config.configured)
     return <Setup title="Connect your team’s Clerk workspace" />;
