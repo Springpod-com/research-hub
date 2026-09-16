@@ -1,12 +1,13 @@
 import { beforeAll, afterAll, describe, it, expect } from "vitest";
 import request from "supertest";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { Store } from "../server/store.js";
 import { createApp } from "../server/app.js";
 import { sampleWorkspace, reviewer } from "./fixtures.js";
-import { publicAddress } from "../server/retrieval.js";
+import { publicAddress, extractPage } from "../server/retrieval.js";
 import type { Workspace } from "../shared/types.js";
 let store: Store;
 let fixture: Workspace;
@@ -52,6 +53,85 @@ describe("Evidence and immutable pack workflow", () => {
           .send({ ...f, roleId: undefined })
       ).status,
     ).toBe(422);
+  });
+  it("accepts a verbatim passage copied with different spacing or quotation marks", async () => {
+    const f = fixture.findings[0];
+    const source = fixture.sources.find(
+      (s) => s.id === f.citations[0].sourceId,
+    )!;
+    const words = source.text.slice(0, 80).trim();
+    const restyled = words.replace(/ /g, "\n  ").replace(/'/g, "’");
+    const r = await request(app())
+      .post(`/api/organisations/${f.orgId}/findings`)
+      .send({
+        claim: "Restyled quotation",
+        kind: "company",
+        citations: [{ sourceId: source.id, quote: restyled, locator: "p1" }],
+      });
+    expect(r.status).toBe(201);
+    // Exclude it again so the shared workspace stays reviewable below.
+    expect(
+      (
+        await request(app())
+          .patch(`/api/findings/${r.body.id}`)
+          .send({ ...r.body, review: "rejected" })
+      ).status,
+    ).toBe(200);
+    const wrongWords = await request(app())
+      .post(`/api/organisations/${f.orgId}/findings`)
+      .send({
+        claim: "Paraphrased quotation",
+        kind: "company",
+        citations: [
+          {
+            sourceId: source.id,
+            quote: words.replace(/e/, "3"),
+            locator: "p1",
+          },
+        ],
+      });
+    expect(wrongWords.status).toBe(422);
+    expect(wrongWords.body.error).toContain("was not found in");
+  });
+  it("explains why a source without captured text cannot support a fact", async () => {
+    const f = fixture.findings[0];
+    const template = fixture.sources.find(
+      (s) => s.id === f.citations[0].sourceId,
+    )!;
+    const photo = {
+      ...template,
+      id: randomUUID(),
+      kind: "image" as const,
+      title: "Warehouse photo",
+      text: "",
+    };
+    await store.transact((w) => {
+      w.sources.push(photo);
+    });
+    const r = await request(app())
+      .post(`/api/organisations/${f.orgId}/findings`)
+      .send({
+        claim: "Observation from a photo",
+        kind: "company",
+        citations: [
+          { sourceId: photo.id, quote: "anything", locator: "Photo" },
+        ],
+      });
+    expect(r.status).toBe(422);
+    expect(r.body.error).toContain("no captured text");
+    const noPassage = await request(app())
+      .post(`/api/organisations/${f.orgId}/findings`)
+      .send({
+        claim: "Fact without a passage",
+        kind: "company",
+        citations: [
+          { sourceId: f.citations[0].sourceId, quote: "", locator: "" },
+        ],
+      });
+    expect(noPassage.status).toBe(422);
+    expect(noPassage.body.error).toContain(
+      "Paste the exact supporting passage",
+    );
   });
   it("blocks a ready pack until findings and activities are reviewed", async () => {
     expect(
@@ -240,6 +320,17 @@ describe("Evidence and immutable pack workflow", () => {
       else process.env.UPLOAD_SCAN_COMMAND = previous;
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+describe("Web capture", () => {
+  it("uses only the document title, ignoring inline SVG titles", () => {
+    const html = `<html><head><title>
+      About us | Example Ltd
+    </title></head><body><header><svg><title>Example Logo</title></svg></header>
+    <main><p>We employ 200 people.</p></main></body></html>`;
+    const page = extractPage(html, "https://example.com/about");
+    expect(page.title).toBe("About us | Example Ltd");
+    expect(page.text).toBe("We employ 200 people.");
   });
 });
 describe("Proxy awareness", () => {

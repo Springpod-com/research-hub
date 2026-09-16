@@ -54,7 +54,7 @@ Create a Clerk application for this workspace. Configure the intended enterprise
 
 ### File uploads
 
-PDF, DOCX, TXT, Markdown (.md), PNG and JPEG up to 10 MB are supported. PDF page markers and document text are retained where extractable. There is no OCR. Production refuses uploads until `UPLOAD_SCAN_COMMAND` is configured. On Replit, provision a compatible scanner and its definitions/service, or implement and test a supported scanning adapter; do not disable the check. Images can be inspected with context and permissions; automated visual analysis is not implemented.
+PDF, DOCX, TXT, Markdown (.md), PNG and JPEG up to 10 MB are supported. A quotation is accepted when its wording appears verbatim in the source's captured text; only line breaks, spacing and typographic quotation marks are ignored, so passages can be copied from the live page or the capture. Sources without captured text (images) cannot support factual findings. PDF page markers and document text are retained where extractable. There is no OCR. Production refuses uploads until `UPLOAD_SCAN_COMMAND` is configured. On Replit, provision a compatible scanner and its definitions/service, or implement and test a supported scanning adapter; do not disable the check. Images can be inspected with context and permissions; automated visual analysis is not implemented.
 
 ## Research behaviour
 

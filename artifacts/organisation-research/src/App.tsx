@@ -626,17 +626,29 @@ export function App({
             {
               name: "sourceId",
               label: "Supporting source",
-              value: sources[0]?.id || "none",
+              value:
+                sources.find((s) => s.text.trim() && s.kind !== "occupation")
+                  ?.id ||
+                sources.find((s) => s.text.trim())?.id ||
+                "none",
               kind: "select",
               options: [
-                ["none", "No source (proposals only)"],
-                ...sources.map((s) => [s.id, s.title] as [string, string]),
+                ["none", "No source (design proposals only)"],
+                ...sources.map(
+                  (s) =>
+                    [
+                      s.id,
+                      s.text.trim() ? s.title : `${s.title} (no captured text)`,
+                    ] as [string, string],
+                ),
               ],
+              hint: "Required for employer facts and occupational context. Images have no captured text and cannot supply a quotation.",
             },
             {
               name: "quote",
               label: "Exact supporting passage",
               kind: "textarea",
+              hint: "Required for employer facts and occupational context; optional for design proposals. Copy the passage word for word from the source’s captured text. Line breaks and spacing do not matter; the wording must be identical.",
             },
             {
               name: "locator",
@@ -651,26 +663,47 @@ export function App({
             scopeField,
           ]}
           onClose={close}
-          onSubmit={async (v) =>
-            save(() =>
+          onSubmit={async (v) => {
+            // Explain the evidence rules before the request so a missing
+            // passage reads as guidance rather than a validation code.
+            const chosen =
+              v.sourceId === "none"
+                ? undefined
+                : sources.find((s) => s.id === v.sourceId);
+            // A design proposal needs no evidence: the pre-selected source is
+            // ignored unless a passage was actually pasted for it.
+            const source =
+              v.kind === "proposal" && !v.quote.trim() ? undefined : chosen;
+            if (v.kind !== "proposal" && !source)
+              throw new Error(
+                "Employer facts and occupational context need a supporting source. Choose one and paste the exact passage, or classify the finding as a design proposal.",
+              );
+            if (source && !source.text.trim())
+              throw new Error(
+                `“${source.title}” has no captured text, so it cannot supply a quotation. Images are not read automatically; cite a web page or text document instead.`,
+              );
+            if (source && !v.quote.trim())
+              throw new Error(
+                `Paste the exact supporting passage from “${source.title}”.`,
+              );
+            await save(() =>
               post(`/organisations/${org!.id}/findings`, {
                 claim: v.claim,
                 kind: v.kind,
                 rationale: v.rationale,
                 roleId: v.roleId === "all" ? undefined : v.roleId,
-                citations:
-                  v.sourceId === "none"
-                    ? []
-                    : [
-                        {
-                          sourceId: v.sourceId,
-                          quote: v.quote,
-                          locator: v.locator,
-                        },
-                      ],
+                citations: source
+                  ? [
+                      {
+                        sourceId: source.id,
+                        quote: v.quote,
+                        locator: v.locator,
+                      },
+                    ]
+                  : [],
               }),
-            )
-          }
+            );
+          }}
         />
       );
     if (modal.type === "question")

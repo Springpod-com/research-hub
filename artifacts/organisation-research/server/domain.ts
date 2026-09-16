@@ -64,7 +64,11 @@ export const roleInput = z.object({
 });
 export const citation = z.object({
   sourceId: z.string().uuid(),
-  quote: text.max(3000),
+  quote: z
+    .string()
+    .trim()
+    .min(1, "Paste the exact supporting passage from the source.")
+    .max(3000),
   locator: z.string().max(300).default("Source excerpt"),
 });
 export const findingInput = z.object({
@@ -198,6 +202,27 @@ export function audit(
   w.audit.unshift({ id: randomUUID(), at: now(), actor, action, subjectId });
   w.audit = w.audit.slice(0, 10000);
 }
+/**
+ * Quotations must be verbatim, but the same words are often copied with
+ * different line breaks, non-breaking spaces or typographic quotation marks
+ * (the live web page versus its collapsed capture, or a PDF with wrapped
+ * lines). Matching ignores only those presentational differences; the
+ * wording and punctuation still have to be exact.
+ */
+export function normaliseQuote(value: string): string {
+  return value
+    .replace(/[\u2018\u2019\u201A\u201B\u2032]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u201F\u2033]/g, '"')
+    .replace(/[\u00AD\u200B-\u200D\uFEFF]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+export function quoteFound(sourceText: string, quote: string): boolean {
+  const q = normaliseQuote(quote);
+  return !!q && normaliseQuote(sourceText).includes(q);
+}
+const shortTitle = (s: Source) =>
+  s.title.length > 80 ? `${s.title.slice(0, 77)}…` : s.title;
 export function validateCitations(
   sources: Source[],
   orgId: string,
@@ -207,14 +232,22 @@ export function validateCitations(
   if (kind !== "proposal" && !citations.length)
     throw new HttpError(
       422,
-      "Factual findings need supporting source passages.",
+      "Employer facts and occupational context need a supporting source passage. Choose a source and paste the exact passage, or classify the finding as a design proposal.",
     );
   for (const c of citations) {
     const s = get(sources, c.sourceId);
     if (s.orgId !== orgId)
       throw new HttpError(422, "Evidence must belong to this organisation.");
-    if (!s.text.includes(c.quote))
-      throw new HttpError(422, "The quotation must match the source exactly.");
+    if (!s.text.trim())
+      throw new HttpError(
+        422,
+        `“${shortTitle(s)}” has no captured text, so it cannot supply a quotation. Images are not read automatically; cite a web page or text document, or record the point as a design proposal.`,
+      );
+    if (!quoteFound(s.text, c.quote))
+      throw new HttpError(
+        422,
+        `The passage was not found in “${shortTitle(s)}”. Copy it word for word from the source’s captured text; line breaks and spacing do not matter.`,
+      );
     if (kind === "company" && s.kind === "occupation")
       throw new HttpError(
         422,

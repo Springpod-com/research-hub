@@ -98,7 +98,12 @@ export async function fetchPublic(
 }
 export function extractPage(html: string, url: string) {
   const $ = load(html);
-  const title = $("title").text().trim() || new URL(url).hostname;
+  // Only the document title: inline SVG icons carry their own <title>
+  // elements ("Company logo"), which would otherwise be concatenated.
+  const title =
+    ($("head title").first().text() || $("title").first().text())
+      .replace(/\s+/g, " ")
+      .trim() || new URL(url).hostname;
   const links = $("a[href]")
     .map((_, a) => {
       try {
