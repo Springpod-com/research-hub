@@ -393,10 +393,14 @@ export function App({
         ] satisfies Field[])
       : []),
   ];
+  // Adding a role asks only for the essentials; seniority and decision-making
+  // boundaries are captured later through "Edit role".
   const roleFields = (r?: Role): Field[] => [
     { name: "title", label: "Job title", value: r?.title, required: true },
     { name: "location", label: "Workplace or location", value: r?.location },
-    { name: "seniority", label: "Seniority", value: r?.seniority },
+    ...(r
+      ? [{ name: "seniority", label: "Seniority", value: r.seniority }]
+      : []),
     {
       name: "responsibilities",
       label: "Responsibilities",
@@ -404,13 +408,17 @@ export function App({
       kind: "textarea",
       required: true,
     },
-    {
-      name: "boundaries",
-      label: "Decision-making boundaries",
-      value: r?.boundaries,
-      kind: "textarea",
-      hint: "What can this person decide, and when must they ask for help?",
-    },
+    ...(r
+      ? ([
+          {
+            name: "boundaries",
+            label: "Decision-making boundaries",
+            value: r.boundaries,
+            kind: "textarea",
+            hint: "What can this person decide, and when must they ask for help?",
+          },
+        ] satisfies Field[])
+      : []),
   ];
   const scopeField: Field = {
     name: "roleId",
