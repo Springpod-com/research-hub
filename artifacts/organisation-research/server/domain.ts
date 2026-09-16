@@ -301,14 +301,13 @@ export function readiness(w: Workspace, orgId: string, roleId: string) {
     )
   )
     issues.push("Wait for research to finish or cancel the run.");
-  const activities = w.activities.filter((a) => a.roleId === roleId);
-  if (!activities.some((a) => a.review === "accepted"))
-    issues.push("Accept at least one candidate activity.");
-  if (
-    activities.some((a) => ["unreviewed", "clarification"].includes(a.review))
-  )
-    issues.push("Review outstanding activity candidates.");
-  for (const activity of activities.filter((a) => a.review === "accepted")) {
+  // Activity candidates are parked for now: they are kept in the data model
+  // and in packs, but they neither gate readiness nor appear in the workspace.
+  // An accepted activity that references evidence not accepted here still
+  // blocks, so no pack can carry an activity its own findings do not support.
+  for (const activity of w.activities.filter(
+    (a) => a.roleId === roleId && a.review === "accepted",
+  )) {
     if (
       activity.findingIds.some(
         (id) => !relevant.some((f) => f.id === id && f.review === "accepted"),

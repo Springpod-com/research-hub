@@ -133,7 +133,7 @@ describe("Evidence and immutable pack workflow", () => {
       "Paste the exact supporting passage",
     );
   });
-  it("blocks a ready pack until findings and activities are reviewed", async () => {
+  it("blocks a ready pack until findings are reviewed", async () => {
     expect(
       (
         await request(app())
@@ -262,6 +262,129 @@ describe("Evidence and immutable pack workflow", () => {
     ).rejects.toThrow("immutable");
     expect((await store.packs()).length).toBe(2);
   });
+  it("deletes a role with its scoped records but never an exported one", async () => {
+    const org = fixture.organisations[0];
+    const source = fixture.sources[0];
+    const created = await request(app())
+      .post(`/api/organisations/${org.id}/roles`)
+      .send({
+        title: "Temporary role",
+        location: "",
+        seniority: "",
+        responsibilities: "",
+        boundaries: "",
+      });
+    expect(created.status).toBe(201);
+    const role = created.body;
+    const scoped = await request(app())
+      .post(`/api/organisations/${org.id}/findings`)
+      .send({
+        claim: "Scoped to the temporary role",
+        kind: "proposal",
+        roleId: role.id,
+        citations: [],
+      });
+    expect(scoped.status).toBe(201);
+    const shared = await request(app())
+      .post(`/api/organisations/${org.id}/findings`)
+      .send({
+        claim: "Organisation-wide proposal",
+        kind: "proposal",
+        citations: [],
+      });
+    expect(shared.status).toBe(201);
+    const jobId = randomUUID();
+    await store.transact((w) => {
+      const linked = w.sources.find((s) => s.id === source.id)!;
+      linked.roleIds.push(role.id);
+      linked.runIds.push(jobId);
+      linked.captureDiff = {
+        previousId: randomUUID(),
+        changed: true,
+        added: [],
+        removed: ["A sentence"],
+        affectedFindingIds: [scoped.body.id, shared.body.id],
+      };
+      w.jobs.push({
+        ...role,
+        id: jobId,
+        orgId: org.id,
+        roleId: role.id,
+        tier: "power",
+        status: "queued",
+        stage: "Queued",
+        errors: [],
+        requestedBy: reviewer.userId,
+        attempts: 0,
+        runs: [],
+      });
+    });
+    const researcher = createApp(store, {
+      testMember: {
+        ...reviewer,
+        userId: "user_researcher",
+        role: "researcher",
+      },
+    });
+    expect(
+      (
+        await request(researcher)
+          .delete(`/api/roles/${role.id}`)
+          .send({ version: role.version })
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await request(app())
+          .delete(`/api/roles/${role.id}`)
+          .send({ version: role.version + 1 })
+      ).status,
+    ).toBe(409);
+    const busy = await request(app())
+      .delete(`/api/roles/${role.id}`)
+      .send({ version: role.version });
+    expect(busy.status).toBe(409);
+    expect(busy.body.error).toContain("in progress");
+    await store.transact((w) => {
+      w.jobs.find((j) => j.roleId === role.id)!.status = "cancelled";
+    });
+    const removed = await request(app())
+      .delete(`/api/roles/${role.id}`)
+      .send({ version: role.version });
+    expect(removed.status).toBe(200);
+    expect(removed.body.deleted).toEqual({
+      findings: 1,
+      questions: 0,
+      activities: 0,
+      jobs: 1,
+    });
+    expect(removed.body.sourcesUnlinked).toBe(1);
+    const w = (await request(app()).get("/api/workspace")).body;
+    expect(w.roles.some((r: { id: string }) => r.id === role.id)).toBe(false);
+    expect(w.findings.map((f: { id: string }) => f.id)).not.toContain(
+      scoped.body.id,
+    );
+    expect(w.findings.map((f: { id: string }) => f.id)).toContain(
+      shared.body.id,
+    );
+    const retained = w.sources.find((s: { id: string }) => s.id === source.id);
+    expect(retained.roleIds).not.toContain(role.id);
+    expect(retained.runIds).not.toContain(jobId);
+    expect(retained.captureDiff.affectedFindingIds).toEqual([shared.body.id]);
+    expect(
+      w.audit.some(
+        (a: { subjectId: string; action: string }) =>
+          a.subjectId === role.id && a.action.includes("deleted"),
+      ),
+    ).toBe(true);
+    // The fixture role has immutable packs from the snapshot test above.
+    const exported = (await request(app()).get("/api/workspace")).body.roles[0];
+    const kept = await request(app())
+      .delete(`/api/roles/${exported.id}`)
+      .send({ version: exported.version });
+    expect(kept.status).toBe(409);
+    expect(kept.body.error).toContain("research pack");
+  });
   it("protects files and refuses invalid uploads", async () => {
     expect(
       (
@@ -344,9 +467,15 @@ describe("Proxy awareness", () => {
     expect(first.status).toBe(200);
     const remaining = (r: request.Response) =>
       Number(r.headers["ratelimit-remaining"]);
-    expect(remaining(first)).toBe(179);
-    expect(remaining(other)).toBe(179);
-    expect(remaining(second)).toBe(178);
+    expect(remaining(first)).toBe(899);
+    expect(remaining(other)).toBe(899);
+    expect(remaining(second)).toBe(898);
+    // Writes have their own, tighter budget that reads do not consume.
+    const write = await request(a)
+      .post("/api/organisations")
+      .set("X-Forwarded-For", "203.0.113.5")
+      .send({});
+    expect(remaining(write)).toBe(179);
   });
 });
 describe("Public source network boundary", () => {

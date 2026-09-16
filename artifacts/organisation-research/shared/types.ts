@@ -155,6 +155,8 @@ export interface ResearchJob extends Base {
   stage: string;
   errors: string[];
   requestedBy: string;
+  /** Version of the research instructions used for this run (0 = built-in default). */
+  promptVersion?: number;
   leaseUntil?: string;
   attempts: number;
   runs: {
@@ -179,6 +181,21 @@ export interface Audit {
   action: string;
   subjectId: string;
 }
+/** One model position in the research tiers; Max runs two independent analyses. */
+export type ModelSlot = "economy" | "power" | "maxClaude" | "maxOpenai";
+export interface PromptSettings {
+  /** The editable research instructions; the output contract and evidence are appended by the server. */
+  instructions: string;
+  /** Monotonic; recorded on each research job for provenance. 0 means the built-in default. */
+  version: number;
+  updatedAt: string;
+  updatedBy: string;
+}
+export interface ResearchSettings {
+  /** Model overrides per slot; the deployment's environment variables remain the default. */
+  models: Partial<Record<ModelSlot, string>>;
+  prompt?: PromptSettings;
+}
 export interface Workspace {
   organisations: Organisation[];
   roles: Role[];
@@ -189,6 +206,8 @@ export interface Workspace {
   jobs: ResearchJob[];
   members: Member[];
   audit: Audit[];
+  /** Absent in workspaces stored before research settings existed. */
+  settings?: ResearchSettings;
 }
 export interface Pack {
   schemaVersion: "1.0.0";
@@ -223,6 +242,7 @@ export const emptyWorkspace = (): Workspace => ({
   jobs: [],
   members: [],
   audit: [],
+  settings: { models: {} },
 });
 export const labels: Record<string, string> = {
   company: "Employer fact",

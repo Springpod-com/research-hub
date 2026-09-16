@@ -1,4 +1,10 @@
-import { useEffect, useState, type ReactNode, type FormEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type FormEvent,
+} from "react";
 import type {
   Workspace,
   Organisation,
@@ -11,10 +17,11 @@ import type {
   Session,
 } from "../shared/types";
 import { labels } from "../shared/types";
-import { api, post, patch, download } from "./api";
+import { api, post, patch, del, download, fetchBlob, ApiError } from "./api";
 import { ResearchWorkspacePage } from "./components/research-workspace-page";
 import * as U from "./ui";
 import { OrgSuggestions } from "./components/org-suggestions";
+import { ResearchSettings } from "./components/research-settings";
 import {
   OccupationMatcher,
   type OccupationRecord,
@@ -125,6 +132,7 @@ function FormModal({
   onClose,
   onSubmit,
   submitLabel = "Save",
+  submitVariant = "default",
   render,
 }: {
   title: string;
@@ -133,6 +141,7 @@ function FormModal({
   onClose: () => void;
   onSubmit: (values: Record<string, string>, file?: File) => Promise<void>;
   submitLabel?: string;
+  submitVariant?: "default" | "destructive";
   /** Extra content rendered below the fields, given the live values. */
   render?: (values: Record<string, string>) => ReactNode;
 }) {
@@ -229,7 +238,7 @@ function FormModal({
             >
               Cancel
             </U.Button>
-            <U.Button type="submit" disabled={busy}>
+            <U.Button type="submit" variant={submitVariant} disabled={busy}>
               {busy ? "Saving…" : submitLabel}
             </U.Button>
           </U.DialogFooter>
@@ -264,11 +273,32 @@ export function App({
   const nav = (path: string) => {
     location.hash = path;
   };
+  const unauthorised = useRef(0);
   const reload = async () => {
     const [s, d] = await Promise.all([api("/session"), api("/workspace")]);
+    unauthorised.current = 0;
     setSession(s);
     setData(d);
     setError("");
+  };
+  // Background refreshes fail now and then (a tab left in the background, a
+  // brief network drop, a server restart). Report that without discarding the
+  // workspace already on screen; the next refresh clears it. Access failures
+  // are different: a 403 means membership was withdrawn, and a 401 that
+  // survives a session renewal and a further poll means the sign-in is gone,
+  // so the workspace leaves the screen.
+  const failed = (e: unknown) => {
+    const status = e instanceof ApiError ? e.status : undefined;
+    if (status === 401) unauthorised.current += 1;
+    if (status === 403 || (status === 401 && unauthorised.current >= 2)) {
+      setData(undefined);
+      setSession(undefined);
+    }
+    setError(
+      status === 401
+        ? "Your sign-in could not be confirmed. Sign out and sign in again."
+        : (e as Error).message,
+    );
   };
   useEffect(() => {
     const hash = () => {
@@ -278,12 +308,17 @@ export function App({
       setSearch("");
     };
     window.addEventListener("hashchange", hash);
-    void reload().catch((e) => setError(e.message));
-    const timer = setInterval(() => {
-      void reload().catch((e) => setError(e.message));
-    }, 7000);
+    void reload().catch(failed);
+    // Hidden tabs do not poll: browsers throttle their timers and let the
+    // session cookie lapse, and nobody is looking. Refresh on return instead.
+    const tick = () => {
+      if (!document.hidden) void reload().catch(failed);
+    };
+    const timer = setInterval(tick, 7000);
+    document.addEventListener("visibilitychange", tick);
     return () => {
       window.removeEventListener("hashchange", hash);
+      document.removeEventListener("visibilitychange", tick);
       clearInterval(timer);
     };
   }, []);
@@ -312,10 +347,6 @@ export function App({
     (roleId === "all" || !x.roleId || x.roleId === roleId);
   const findings = data?.findings.filter(relevant) || [];
   const questions = data?.questions.filter(relevant) || [];
-  const activities =
-    data?.activities.filter(
-      (a) => a.orgId === org?.id && (roleId === "all" || a.roleId === roleId),
-    ) || [];
   const sources =
     data?.sources.filter(
       (s) =>
@@ -485,6 +516,93 @@ export function App({
           }
         />
       );
+    if (modal.type === "delete-role") {
+      const r = m as Role;
+      const count = (items: { roleId?: string }[]) =>
+        items.filter((x) => x.roleId === r.id).length;
+      const impact = {
+        findings: count(data?.findings || []),
+        questions: count(data?.questions || []),
+        activities: count(data?.activities || []),
+        jobs: count(data?.jobs || []),
+        sources: (data?.sources || []).filter((s) => s.roleIds.includes(r.id))
+          .length,
+        packs: (data?.packs || []).filter((p) => p.role.id === r.id).length,
+      };
+      const running = (data?.jobs || []).some(
+        (j) =>
+          j.roleId === r.id && ["queued", "researching"].includes(j.status),
+      );
+      const blocked = impact.packs > 0 || running;
+      return (
+        <FormModal
+          title="Delete this role?"
+          description={`${r.title} will be removed from ${org!.name}. This cannot be undone.`}
+          fields={[]}
+          submitLabel={blocked ? "Cannot delete" : "Delete role"}
+          submitVariant="destructive"
+          onClose={close}
+          render={() => (
+            <div className="space-y-4">
+              {impact.packs > 0 && (
+                <U.Alert>
+                  <U.AlertDescription>
+                    This role has {impact.packs} research pack
+                    {impact.packs === 1 ? "" : "s"}. Packs are immutable
+                    records, so a role that has been exported cannot be deleted.
+                  </U.AlertDescription>
+                </U.Alert>
+              )}
+              {running && (
+                <U.Alert>
+                  <U.AlertDescription>
+                    A research run is in progress for this role. Cancel it under
+                    Research runs on the Overview tab before deleting the role.
+                  </U.AlertDescription>
+                </U.Alert>
+              )}
+              <ul className="text-p4 list-disc pl-5 space-y-1">
+                <li>
+                  {impact.findings} finding{impact.findings === 1 ? "" : "s"}{" "}
+                  scoped to this role will be deleted, with{" "}
+                  {impact.findings === 1 ? "its" : "their"} review history.
+                </li>
+                <li>
+                  {impact.questions} question
+                  {impact.questions === 1 ? "" : "s"}
+                  {impact.activities > 0 &&
+                    `, ${impact.activities} ${impact.activities === 1 ? "activity" : "activities"}`}{" "}
+                  and {impact.jobs} research run{impact.jobs === 1 ? "" : "s"}{" "}
+                  for this role will be deleted.
+                </li>
+                <li>
+                  Organisation-wide findings and questions are not affected.
+                  Sources stay with the organisation
+                  {impact.sources > 0 &&
+                    ` (${impact.sources} will no longer be linked to this role)`}
+                  .
+                </li>
+              </ul>
+              <p className="text-p5 text-muted-foreground">
+                The deletion is recorded in the audit log.
+              </p>
+            </div>
+          )}
+          onSubmit={async () => {
+            if (blocked)
+              throw new Error(
+                impact.packs > 0
+                  ? "A role with research packs cannot be deleted."
+                  : "Cancel the research run before deleting the role.",
+              );
+            await del(`/roles/${r.id}`, { version: r.version });
+            if (roleId === r.id) setRoleId("all");
+            await reload();
+            U.toast({ title: "Role deleted" });
+          }}
+        />
+      );
+    }
     if (modal.type === "statement")
       return (
         <FormModal
@@ -777,49 +895,6 @@ export function App({
                     roleId: v.roleId === "all" ? undefined : v.roleId,
                   }),
             )
-          }
-        />
-      );
-    if (modal.type === "activity")
-      return (
-        <FormModal
-          title="Propose an activity"
-          description="A candidate for storyboard design, not an approved task or employer procedure."
-          fields={[
-            {
-              ...scopeField,
-              options: roleOptions.filter(([id]) => id !== "all"),
-              value: roleId === "all" ? orgRoles[0]?.id : roleId,
-            },
-            { name: "title", label: "Activity title", required: true },
-            {
-              name: "action",
-              label: "What the learner does",
-              required: true,
-              kind: "textarea",
-            },
-            { name: "output", label: "What they produce", required: true },
-            {
-              name: "materials",
-              label: "Materials needed",
-              required: true,
-              kind: "textarea",
-            },
-            {
-              name: "learning",
-              label: "What this reveals about the role",
-              required: true,
-              kind: "textarea",
-            },
-            {
-              name: "confirmation",
-              label: "What the client must confirm",
-              kind: "textarea",
-            },
-          ]}
-          onClose={close}
-          onSubmit={async (v) =>
-            save(() => post(`/organisations/${org!.id}/activities`, v))
           }
         />
       );
@@ -1160,51 +1235,185 @@ export function App({
     </U.Button>
   );
   function renderOverview() {
+    const o = org!;
+    const orgSources = data?.sources.filter((x) => x.orgId === o.id) || [];
+    const orgFindings = data?.findings.filter((x) => x.orgId === o.id) || [];
+    const orgQuestions = data?.questions.filter((x) => x.orgId === o.id) || [];
+    const orgJobs = data?.jobs.filter((x) => x.orgId === o.id) || [];
+    const kindCounts = (
+      [
+        ["web", "web page"],
+        ["document", "document"],
+        ["statement", "statement"],
+        ["image", "image"],
+        ["occupation", "occupation source"],
+      ] as const
+    )
+      .map(([kind, label]) => [
+        orgSources.filter((x) => x.kind === kind).length,
+        label,
+      ])
+      .filter(([n]) => (n as number) > 0)
+      .map(([n, label]) => `${n} ${label}${n === 1 ? "" : "s"}`);
+    const accepted = orgFindings.filter((f) => f.review === "accepted").length;
+    const awaiting = orgFindings.filter((f) =>
+      ["unreviewed", "clarification"].includes(f.review),
+    ).length;
+    const openQuestions = orgQuestions.filter(
+      (q) => q.status !== "answered",
+    ).length;
+    const lastRun = [...orgJobs].sort((x, y) =>
+      y.updatedAt.localeCompare(x.updatedAt),
+    )[0];
+    const runLabel: Record<string, string> = {
+      queued: "queued",
+      researching: "in progress",
+      completed: "completed",
+      gaps: "completed with gaps",
+      failed: "failed",
+      cancelled: "cancelled",
+    };
+    const host = (() => {
+      try {
+        return o.website
+          ? new URL(o.website).hostname.replace(/^www\./, "")
+          : "";
+      } catch {
+        return o.website;
+      }
+    })();
+    const detail = (label: string, value: ReactNode, muted = false) => (
+      <div key={label} className="min-w-0">
+        <dt className="text-p5 text-muted-foreground">{label}</dt>
+        <dd
+          className={`text-p4 mt-0.5 break-words ${muted ? "text-muted-foreground" : ""}`}
+        >
+          {value}
+        </dd>
+      </div>
+    );
     return (
       <div className="space-y-6">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <U.Card className="lg:col-span-2">
             <U.CardHeader>
-              <U.CardTitle>About this organisation</U.CardTitle>
-              <U.CardDescription>
-                Working context for the team. Check individual claims in
-                Evidence.
-              </U.CardDescription>
-            </U.CardHeader>
-            <U.CardContent className="space-y-5">
-              <p className="text-p3 whitespace-pre-wrap">
-                {org!.summary ||
-                  "Add a short overview, then capture sources to build the evidence behind it."}
-              </p>
-              <div className="flex flex-wrap gap-5 text-p4 text-muted-foreground">
-                <span className="inline-flex gap-2 items-center">
-                  <U.IconLocationPin size={20} />
-                  {org!.country}
-                </span>
-                <span className="inline-flex gap-2 items-center">
-                  <U.IconWork size={20} />
-                  {org!.division || "Whole organisation"}
-                </span>
-              </div>
-              {org!.website && (
-                <a
-                  className="text-p4 underline underline-offset-4 break-all"
-                  href={org!.website}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  {org!.website}
-                </a>
-              )}
-              <div>
+              <div className="flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-start">
+                <div className="min-w-0 flex-1">
+                  <U.CardTitle>About this organisation</U.CardTitle>
+                  <U.CardDescription>
+                    Working context for the team. Individual claims are checked
+                    in Evidence.
+                  </U.CardDescription>
+                </div>
                 <U.Button
                   variant="outline"
                   size="sm"
-                  onClick={() => setModal({ type: "organisation", item: org })}
+                  className="shrink-0 self-start"
+                  onClick={() => setModal({ type: "organisation", item: o })}
                 >
                   Edit organisation
                 </U.Button>
               </div>
+            </U.CardHeader>
+            <U.CardContent className="space-y-6">
+              {o.summary ? (
+                <p className="text-p3 whitespace-pre-wrap">{o.summary}</p>
+              ) : (
+                <div className="rounded-lg border border-dashed p-4">
+                  <p className="text-p4 font-medium">No overview yet</p>
+                  <p className="text-p5 text-muted-foreground mt-1">
+                    A short description of what the organisation does and why it
+                    matters for this research helps the whole team. It is
+                    context, not evidence.
+                  </p>
+                  <U.Button
+                    variant="ghost"
+                    size="sm"
+                    className="mt-2 -ml-3"
+                    onClick={() => setModal({ type: "organisation", item: o })}
+                  >
+                    Add an overview
+                    <U.IconArrowRight size={16} />
+                  </U.Button>
+                </div>
+              )}
+              <dl className="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-5">
+                {detail(
+                  "Website",
+                  o.website ? (
+                    <a
+                      className="inline-flex items-center gap-1 underline underline-offset-4"
+                      href={o.website}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      <U.IconGlobeWorld size={16} />
+                      {host}
+                    </a>
+                  ) : (
+                    "Not recorded"
+                  ),
+                  !o.website,
+                )}
+                {detail(
+                  "Country",
+                  <span className="inline-flex items-center gap-1">
+                    <U.IconLocationPin size={16} />
+                    {o.country}
+                  </span>,
+                )}
+                {detail(
+                  "Scope",
+                  <span className="inline-flex items-center gap-1">
+                    <U.IconWork size={16} />
+                    {o.division || "Whole organisation"}
+                  </span>,
+                )}
+                {detail("Research owner", o.owner || "Unassigned", !o.owner)}
+                {detail(
+                  "Sources",
+                  kindCounts.length > 1
+                    ? `${orgSources.length} · ${kindCounts.join(", ")}`
+                    : kindCounts[0] || "None captured yet",
+                  !orgSources.length,
+                )}
+                {detail(
+                  "Findings",
+                  orgFindings.length
+                    ? `${accepted} accepted · ${awaiting} awaiting review`
+                    : "None yet",
+                  !orgFindings.length,
+                )}
+                {detail(
+                  "Open questions",
+                  openQuestions
+                    ? `${openQuestions} of ${orgQuestions.length}`
+                    : orgQuestions.length
+                      ? "All answered"
+                      : "None",
+                  !openQuestions,
+                )}
+                {detail(
+                  "Last research run",
+                  lastRun
+                    ? `${date(lastRun.updatedAt)} · ${runLabel[lastRun.status] || lastRun.status}`
+                    : "Not run yet",
+                  !lastRun,
+                )}
+              </dl>
+              {o.brandNotes && (
+                <div>
+                  <p className="text-p5 text-muted-foreground">
+                    Brand and permissions notes
+                  </p>
+                  <p className="text-p4 whitespace-pre-wrap mt-0.5">
+                    {o.brandNotes}
+                  </p>
+                </div>
+              )}
+              <p className="text-p5 text-muted-foreground">
+                Updated {date(o.updatedAt)}
+              </p>
             </U.CardContent>
           </U.Card>
           <U.Card className="bg-brand-teal-100">
@@ -1305,6 +1514,9 @@ export function App({
                         </p>
                         <p className="text-p5 text-muted-foreground">
                           {j.stage} · {date(j.createdAt)}
+                          {j.promptVersion
+                            ? ` · prompt v${j.promptVersion}`
+                            : ""}
                         </p>
                       </div>
                       <Status value={j.status} />
@@ -1660,6 +1872,18 @@ export function App({
                     >
                       Edit role
                     </U.Button>
+                    {session?.role !== "researcher" && (
+                      <U.Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-destructive hover:text-destructive"
+                        onClick={() =>
+                          setModal({ type: "delete-role", item: r })
+                        }
+                      >
+                        Delete role
+                      </U.Button>
+                    )}
                   </div>
                 </div>
                 {r.reviewChanged && (
@@ -1831,110 +2055,8 @@ export function App({
         {!orgRoles.length && (
           <Empty
             title="Scope the work first"
-            description="Add a role to connect responsibilities, occupational context and activity candidates."
+            description="Add a role to connect responsibilities, occupational context and evidence."
           />
-        )}
-        <div className="flex flex-wrap justify-between gap-3 items-center">
-          <div>
-            <h2 className="text-h5">Activity candidates</h2>
-            <p className="text-p4 text-muted-foreground mt-1">
-              Proposals for the storyboard designer. Client validation still
-              follows.
-            </p>
-          </div>
-          <U.Button
-            variant="outline"
-            disabled={!orgRoles.length}
-            onClick={() => setModal({ type: "activity" })}
-          >
-            Propose activity
-          </U.Button>
-        </div>
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {activities.map((a, i) => (
-            <U.Card key={a.id}>
-              <U.CardHeader>
-                <div className="flex justify-between gap-2 mb-3">
-                  <U.Badge variant="outline">Candidate {i + 1}</U.Badge>
-                  <Status value={a.review} />
-                </div>
-                <U.CardTitle>{a.title}</U.CardTitle>
-                <U.CardDescription>
-                  {orgRoles.find((r) => r.id === a.roleId)?.title}
-                </U.CardDescription>
-              </U.CardHeader>
-              <U.CardContent className="space-y-4">
-                <p className="text-p3">{a.action}</p>
-                <dl className="space-y-3 text-p4">
-                  {[
-                    ["Learner output", a.output],
-                    ["Materials", a.materials],
-                    ["What it reveals", a.learning],
-                    [
-                      "Confirm with the client",
-                      a.confirmation || "Required before storyboard approval",
-                    ],
-                  ].map(([label, value]) => (
-                    <div key={label}>
-                      <dt className="font-semibold">{label}</dt>
-                      <dd className="text-muted-foreground mt-1">{value}</dd>
-                    </div>
-                  ))}
-                </dl>
-                {a.findingIds.length > 0 && (
-                  <p className="text-p5 text-muted-foreground">
-                    Based on {a.findingIds.length} evidence findings.
-                  </p>
-                )}
-                <div className="flex flex-wrap gap-2">
-                  <U.Button
-                    variant="outline"
-                    size="sm"
-                    disabled={busy || a.review === "accepted"}
-                    onClick={() =>
-                      void run(
-                        () =>
-                          patch(`/activities/${a.id}`, {
-                            version: a.version,
-                            review: "accepted",
-                            confirmation: a.confirmation,
-                          }),
-                        "Candidate accepted for drafting",
-                      )
-                    }
-                  >
-                    Accept for drafting
-                  </U.Button>
-                  <U.Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={busy || a.review === "rejected"}
-                    onClick={() =>
-                      void run(
-                        () =>
-                          patch(`/activities/${a.id}`, {
-                            version: a.version,
-                            review: "rejected",
-                            confirmation: a.confirmation,
-                          }),
-                        "Candidate excluded",
-                      )
-                    }
-                  >
-                    Exclude
-                  </U.Button>
-                </div>
-              </U.CardContent>
-            </U.Card>
-          ))}
-        </div>
-        {!activities.length && orgRoles.length > 0 && (
-          <U.Card>
-            <Empty
-              title="Turn real work into possibilities"
-              description="Run role research to generate candidates, or add a proposal grounded in the evidence you already have."
-            />
-          </U.Card>
         )}
       </div>
     );
@@ -2104,7 +2226,7 @@ export function App({
           <U.Card>
             <Empty
               title="Your research, ready to hand over"
-              description="Create a draft snapshot at any point. A reviewer can mark a pack ready after the evidence and activity review is complete."
+              description="Create a draft snapshot at any point. A reviewer can mark a pack ready after the evidence review is complete."
             />
           </U.Card>
         )}
@@ -2116,39 +2238,9 @@ export function App({
       {pageHeading(
         "Workspace",
         "Team & connections",
-        "Access is managed independently from Employer Intelligence.",
+        "Team access, research connections and the research prompt. Access is managed independently from Employer Intelligence.",
       )}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <U.Card>
-          <U.CardHeader>
-            <U.CardTitle>Research connections</U.CardTitle>
-            <U.CardDescription>
-              Provider keys stay on the server. The selected model does not
-              grant approval.
-            </U.CardDescription>
-          </U.CardHeader>
-          <U.CardContent className="space-y-4">
-            {[
-              ["economy", "Economy", "Gemini · economical evidence extraction"],
-              ["power", "Power", "Claude Sonnet · research synthesis"],
-              [
-                "max",
-                "Max",
-                "Fable + GPT-6 · independent analysis of shared sources",
-              ],
-            ].map(([id, label, desc]) => (
-              <div className="flex justify-between gap-3" key={id}>
-                <div>
-                  <p className="text-p3 font-medium">{label}</p>
-                  <p className="text-p5 text-muted-foreground">{desc}</p>
-                </div>
-                <U.Badge variant="outline">
-                  {session?.providers[id] ? "Configured" : "Needs setup"}
-                </U.Badge>
-              </div>
-            ))}
-          </U.CardContent>
-        </U.Card>
         <U.Card>
           <U.CardHeader>
             <U.CardTitle>Team access</U.CardTitle>
@@ -2191,6 +2283,11 @@ export function App({
             )}
           </U.CardContent>
         </U.Card>
+        <ResearchSettings
+          key={session?.userId}
+          session={session || null}
+          members={data?.members || []}
+        />
       </div>
     </>
   );
@@ -2285,16 +2382,22 @@ export function App({
                   </U.AlertDescription>
                 </U.Alert>
               )}
-              {error ? (
+              {error && data && (
+                <U.Alert role="alert" className="mb-6">
+                  <U.AlertTitle>Showing the last loaded workspace</U.AlertTitle>
+                  <U.AlertDescription>
+                    The latest refresh failed: {error} Retrying automatically.
+                  </U.AlertDescription>
+                </U.Alert>
+              )}
+              {error && !data ? (
                 <U.Alert role="alert">
                   <U.AlertTitle>Workspace unavailable</U.AlertTitle>
                   <U.AlertDescription>{error}</U.AlertDescription>
                   <U.Button
                     variant="outline"
                     className="mt-4"
-                    onClick={() =>
-                      void reload().catch((e) => setError(e.message))
-                    }
+                    onClick={() => void reload().catch(failed)}
                   >
                     Retry
                   </U.Button>
@@ -2369,8 +2472,8 @@ export function App({
                     <U.PartnerTabsList className="w-full justify-start overflow-x-auto mb-6">
                       {[
                         ["overview", "Overview"],
-                        ["evidence", "Evidence"],
                         ["roles", "Roles"],
+                        ["evidence", "Evidence"],
                         ["questions", "Questions"],
                         ["packs", "Research packs"],
                       ].map(([id, name]) => (
@@ -2716,11 +2819,7 @@ function SourcePanel({
     if (s.kind !== "image") return;
     let url = "";
     let live = true;
-    fetch(`/api/sources/${s.id}/file`)
-      .then((r) => {
-        if (!r.ok) throw new Error("Cannot load image");
-        return r.blob();
-      })
+    fetchBlob(`/sources/${s.id}/file`, "Cannot load image")
       .then((b) => {
         if (live) {
           url = URL.createObjectURL(b);

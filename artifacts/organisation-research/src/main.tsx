@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { ClerkProvider, SignIn, useAuth, UserButton } from "@clerk/react";
 import { publishableKeyFromHost } from "@clerk/react/internal";
 import { App } from "./App";
-import { api } from "./api";
+import { api, setSessionRefresher } from "./api";
 import {
   Card,
   CardContent,
@@ -17,7 +17,13 @@ import {
 } from "./ui";
 import "./index.css";
 function Authenticated() {
-  const { isLoaded, isSignedIn } = useAuth();
+  const { isLoaded, isSignedIn, getToken } = useAuth();
+  // Authentication stays cookie-based; asking Clerk for a token makes its SDK
+  // renew the session cookie, which is what a retried request needs.
+  useEffect(() => {
+    setSessionRefresher(() => getToken({ skipCache: true }));
+    return () => setSessionRefresher(undefined);
+  }, [getToken]);
   if (!isLoaded) return <Loading />;
   if (!isSignedIn)
     return (
@@ -47,7 +53,15 @@ function Loading() {
   );
 }
 /** Shown when the workspace cannot be opened until an administrator acts. */
-function Setup({ title, error }: { title: string; error?: string }) {
+function Setup({
+  title,
+  error,
+  transient = false,
+}: {
+  title: string;
+  error?: string;
+  transient?: boolean;
+}) {
   return (
     <main className="min-h-dvh bg-background flex items-center justify-center p-6">
       <Card className="w-full max-w-xl">
@@ -65,12 +79,12 @@ function Setup({ title, error }: { title: string; error?: string }) {
             </Alert>
           )}
           <p className="text-p4 text-muted-foreground">
-            An administrator needs to configure Clerk SSO and workspace
-            membership before internal research can be accessed. See the setup
-            guide supplied with this project.
+            {transient
+              ? "The workspace server did not respond. It may be restarting; your sign-in is unaffected. Try again in a moment."
+              : "An administrator needs to configure Clerk SSO and workspace membership before internal research can be accessed. See the setup guide supplied with this project."}
           </p>
           <Button variant="outline" onClick={() => location.reload()}>
-            Check setup again
+            {transient ? "Try again" : "Check setup again"}
           </Button>
         </CardContent>
       </Card>
@@ -85,7 +99,7 @@ function Root() {
       .then(setConfig)
       .catch((e) => setError(e.message));
   }, []);
-  if (error) return <Setup title="Could not connect" error={error} />;
+  if (error) return <Setup title="Could not connect" error={error} transient />;
   if (!config) return <Loading />;
   if (config.preview) return <App preview />;
   if (!config.configured)

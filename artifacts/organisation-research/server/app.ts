@@ -46,7 +46,25 @@ import {
   schemes as occupationSchemes,
 } from "./occupations.js";
 import type { Member, Source, Workspace } from "../shared/types.js";
-import { providers } from "./research.js";
+import {
+  providers,
+  providerAccess,
+  probeModel,
+  promptSettings,
+  DEFAULT_INSTRUCTIONS,
+  OUTPUT_CONTRACT,
+  CONTEXT_NOTE,
+} from "./research.js";
+import {
+  SLOTS,
+  CATALOGUE,
+  PROVIDER_LABEL,
+  MODEL_ID,
+  providerOf,
+  resolveModel,
+  slotProblem,
+  settingsOf,
+} from "./models.js";
 import { fetchPublic, extractPage } from "./retrieval.js";
 import { allowedOrigins } from "./origins.js";
 import {
@@ -115,13 +133,27 @@ export function createApp(store: Store, options: AppOptions = {}) {
   app.use(
     helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }),
   );
+  // Reads are polled by every open tab (two requests every seven seconds) and
+  // a team often shares one office address, so they get their own, larger
+  // budget; writes keep the tighter one.
+  const isRead = (req: Request) => ["GET", "HEAD"].includes(req.method);
   app.use(
     "/api",
+    rateLimit({
+      windowMs: 60000,
+      limit: 900,
+      standardHeaders: true,
+      legacyHeaders: false,
+      skip: (req) => !isRead(req),
+      message: { error: "Too many requests from this network; wait a minute." },
+    }),
     rateLimit({
       windowMs: 60000,
       limit: 180,
       standardHeaders: true,
       legacyHeaders: false,
+      skip: isRead,
+      message: { error: "Too many changes at once; wait a minute." },
     }),
   );
   app.use(express.json({ limit: "500kb" }));
@@ -230,7 +262,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
       res.json({
         ...res.locals.member,
         demo: !!options.preview,
-        providers: providers(),
+        providers: providers(await store.read()),
       }),
     ),
   );
@@ -341,6 +373,87 @@ export function createApp(store: Store, options: AppOptions = {}) {
           Object.assign(role, data);
           audit(w, m.userId, "Role updated", role.id);
           return role;
+        }),
+      );
+    }),
+  );
+  app.delete(
+    "/api/roles/:id",
+    handler(async (req, res) => {
+      res.json(
+        await mutate(req, res, async (w, m, db) => {
+          if (!["reviewer", "admin"].includes(m.role))
+            throw new HttpError(
+              403,
+              "Only reviewers and administrators can delete a role.",
+            );
+          const role = get(w.roles, String(req.params.id));
+          if (req.body?.version !== role.version)
+            throw new HttpError(
+              409,
+              "This role changed. Refresh it before deleting.",
+            );
+          // Packs are immutable delivery records; a role that has been
+          // exported stays so that its snapshots keep a live parent.
+          const packs = await db.query(
+            "SELECT COUNT(*) AS n FROM research_packs WHERE role_id=$1",
+            [role.id],
+          );
+          const packCount = Number(packs.rows[0].n);
+          if (packCount)
+            throw new HttpError(
+              409,
+              `This role has ${packCount} research pack${packCount === 1 ? "" : "s"}. Packs are immutable records, so a role that has been exported cannot be deleted.`,
+            );
+          if (
+            w.jobs.some(
+              (j) =>
+                j.roleId === role.id &&
+                ["queued", "researching"].includes(j.status),
+            )
+          )
+            throw new HttpError(
+              409,
+              "A research run is in progress for this role. Cancel it before deleting the role.",
+            );
+          const scoped = <T extends { roleId?: string }>(items: T[]) =>
+            items.filter((x) => x.roleId === role.id).length;
+          const deleted = {
+            findings: scoped(w.findings),
+            questions: scoped(w.questions),
+            activities: scoped(w.activities),
+            jobs: scoped(w.jobs),
+          };
+          // Sources stay with the organisation, but their provenance must not
+          // point at research runs or flagged findings that no longer exist.
+          const gone = new Set(
+            [...w.findings, ...w.jobs]
+              .filter((x) => x.roleId === role.id)
+              .map((x) => x.id),
+          );
+          let sourcesUnlinked = 0;
+          for (const s of w.sources) {
+            if (s.roleIds.includes(role.id)) {
+              s.roleIds = s.roleIds.filter((id) => id !== role.id);
+              sourcesUnlinked++;
+            }
+            s.runIds = s.runIds.filter((id) => !gone.has(id));
+            if (s.captureDiff)
+              s.captureDiff.affectedFindingIds =
+                s.captureDiff.affectedFindingIds.filter((id) => !gone.has(id));
+          }
+          w.findings = w.findings.filter((f) => f.roleId !== role.id);
+          w.questions = w.questions.filter((q) => q.roleId !== role.id);
+          w.activities = w.activities.filter((a) => a.roleId !== role.id);
+          w.jobs = w.jobs.filter((j) => j.roleId !== role.id);
+          w.roles = w.roles.filter((r) => r.id !== role.id);
+          audit(
+            w,
+            m.userId,
+            `Role “${role.title}” deleted with ${deleted.findings} role-scoped findings, ${deleted.questions} questions, ${deleted.activities} activities and ${deleted.jobs} research runs; ${sourcesUnlinked} sources kept for the organisation`,
+            role.id,
+          );
+          return { id: role.id, deleted, sourcesUnlinked };
         }),
       );
     }),
@@ -1075,10 +1188,10 @@ export function createApp(store: Store, options: AppOptions = {}) {
           tier: z.enum(["economy", "power", "max"]),
         })
         .parse(req.body);
-      if (!providers()[data.tier])
+      if (!providers(await store.read())[data.tier])
         throw new HttpError(
           503,
-          "The selected research tier is not configured. Add the provider keys in the server environment.",
+          "The selected research tier is not configured. Check the provider keys and models under Research connections.",
         );
       res.status(202).json(
         await mutate(req, res, (w, m) => {
@@ -1160,6 +1273,146 @@ export function createApp(store: Store, options: AppOptions = {}) {
             else w.members.push(data);
             audit(w, m.userId, "Workspace membership updated", data.userId);
             return data;
+          },
+          true,
+        ),
+      );
+    }),
+  );
+  // Research settings: which model each connection uses and the editable
+  // research instructions. Everyone can read them; administrators change them.
+  const settingsView = (w: Workspace) => ({
+    slots: SLOTS.map((info) => {
+      const resolved = resolveModel(w, info.slot);
+      return {
+        ...info,
+        providerLabel: PROVIDER_LABEL[info.provider],
+        model: resolved.model ?? null,
+        source: resolved.source,
+        problem: resolved.problem ?? null,
+        environmentModel: process.env[info.envVar]?.trim() || null,
+        access: !!providerAccess(info.provider),
+        options: CATALOGUE[info.provider],
+      };
+    }),
+    tiers: providers(w),
+    prompt: promptSettings(w),
+    defaultInstructions: DEFAULT_INSTRUCTIONS,
+    contract: OUTPUT_CONTRACT,
+    contextNote: CONTEXT_NOTE,
+  });
+  app.get(
+    "/api/research-settings",
+    handler(async (_req, res) => res.json(settingsView(await store.read()))),
+  );
+  app.put(
+    "/api/research-settings/models/:slot",
+    handler(async (req, res) => {
+      const info = SLOTS.find((s) => s.slot === req.params.slot);
+      if (!info) throw new HttpError(404, "Unknown research connection.");
+      const { model } = z
+        .object({ model: z.string().trim().max(100) })
+        .parse(req.body);
+      if ((res.locals.member as Member).role !== "admin")
+        throw new HttpError(403, "Administrator access required.");
+      if (model) {
+        if (!MODEL_ID.test(model))
+          throw new HttpError(422, "Enter a model ID such as claude-sonnet-5.");
+        if (providerOf(model) !== info.provider)
+          throw new HttpError(
+            422,
+            `${info.label} runs on ${PROVIDER_LABEL[info.provider]}; "${model}" would be sent to ${PROVIDER_LABEL[providerOf(model)]}.`,
+          );
+        if (!providerAccess(info.provider))
+          throw new HttpError(
+            422,
+            `No ${PROVIDER_LABEL[info.provider]} connection is configured on the server, so the model cannot be verified.`,
+          );
+        // Verified live before anything is stored: a saved model must answer.
+        try {
+          await probeModel(model);
+        } catch (e) {
+          throw new HttpError(
+            422,
+            `"${model}" did not answer through the ${PROVIDER_LABEL[info.provider]} connection: ${(e as Error).message}`,
+          );
+        }
+      } else {
+        const env = process.env[info.envVar]?.trim();
+        if (!env)
+          throw new HttpError(
+            422,
+            `There is no environment default for ${info.label}; choose a model instead.`,
+          );
+        const problem = slotProblem(info, env);
+        if (problem) throw new HttpError(422, problem);
+      }
+      res.json(
+        await mutate(
+          req,
+          res,
+          (w, m) => {
+            const settings = settingsOf(w);
+            const before = resolveModel(w, info.slot).model ?? "none";
+            if (model) settings.models[info.slot] = model;
+            else delete settings.models[info.slot];
+            const after = resolveModel(w, info.slot).model ?? "none";
+            audit(
+              w,
+              m.userId,
+              `Research model changed for ${info.label}: ${before} → ${after}${model ? " (verified with a live request)" : " (environment default)"}`,
+              info.slot,
+            );
+            return settingsView(w);
+          },
+          true,
+        ),
+      );
+    }),
+  );
+  app.put(
+    "/api/research-settings/prompt",
+    handler(async (req, res) => {
+      const data = z
+        .object({
+          instructions: z.string().max(20000).optional(),
+          reset: z.boolean().optional(),
+          version: z.number().int().nonnegative(),
+        })
+        .parse(req.body);
+      const instructions = data.reset
+        ? DEFAULT_INSTRUCTIONS
+        : (data.instructions ?? "").replace(/\r\n/g, "\n").trim();
+      if (!instructions)
+        throw new HttpError(422, "The research instructions cannot be empty.");
+      res.json(
+        await mutate(
+          req,
+          res,
+          (w, m) => {
+            const current = promptSettings(w);
+            if (current.version !== data.version)
+              throw new HttpError(
+                409,
+                "The research prompt changed since you opened it. Reload and review the current version before saving.",
+              );
+            if (instructions === current.instructions)
+              throw new HttpError(422, "Nothing changed in the instructions.");
+            settingsOf(w).prompt = {
+              instructions,
+              version: current.version + 1,
+              updatedAt: now(),
+              updatedBy: m.userId,
+            };
+            audit(
+              w,
+              m.userId,
+              data.reset
+                ? `Research prompt reset to the built-in default (version ${current.version + 1})`
+                : `Research prompt updated (version ${current.version + 1})`,
+              "research-prompt",
+            );
+            return settingsView(w);
           },
           true,
         ),

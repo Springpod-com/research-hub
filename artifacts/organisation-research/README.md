@@ -1,6 +1,6 @@
 # Organisation Research
 
-A standalone Springpod team workspace for collecting organisation and role evidence, reviewing findings, proposing activities, recording client questions, and exporting immutable research packs. Built with React, the Springpod design system, Express, Clerk and PostgreSQL. It has no Employer Intelligence service or database dependency.
+A standalone Springpod team workspace for collecting organisation and role evidence, reviewing findings, recording client questions, and exporting immutable research packs. Built with React, the Springpod design system, Express, Clerk and PostgreSQL. It has no Employer Intelligence service or database dependency.
 
 **Start here for Replit:** [Handover prompt](docs/REPLIT-HANDOVER.md). Read [implementation status](docs/IMPLEMENTATION-STATUS.md) alongside the [PRD](docs/PRD.md). This is an implemented MVP with remaining live integrations and PRD gaps explicitly recorded, not a claim of production sign-off.
 
@@ -15,7 +15,7 @@ npm run demo
 
 Open the Vite address printed in the terminal (normally http://localhost:5173). The separate demo entry point seeds fictional organisations into a temporary in-memory database. It does not use Clerk, call AI providers, or persist changes after restart. It must never be deployed. Production rejects preview authentication options.
 
-Try Northstar Logistics → Evidence → Inspect & review → Accept for drafting; Roles → accept the activity; Research packs → Create snapshot → Ready for storyboard drafting. Download Markdown and JSON. Open client questions remain visible.
+Try Northstar Logistics → Evidence → Inspect & review → Accept for drafting; Roles → mark the profile ready; Research packs → Create snapshot → Ready for storyboard drafting. Download Markdown and JSON. Open client questions remain visible.
 
 ## Run the real workspace locally
 
@@ -28,7 +28,7 @@ Without `DATABASE_URL`, development uses a local PGlite database in `.data/resea
 
 ## Replit configuration
 
-Import this directory as a new project. `.replit` supplies development and VM deployment commands. Build installs dependencies, builds the frontend and runs the design audit. Production serves the frontend and API together on port 5173, mapped to external port 80. An always-running deployment is required for the embedded research worker. The server trusts exactly one proxy hop (Replit's edge) so the per-client API rate limit (180 requests a minute) is keyed on the real client address; if you ever put another proxy in front of it, adjust the `trust proxy` setting in `server/app.ts`.
+Import this directory as a new project. `.replit` supplies development and VM deployment commands. Build installs dependencies, builds the frontend and runs the design audit. Production serves the frontend and API together on port 5173, mapped to external port 80. An always-running deployment is required for the embedded research worker. The server trusts exactly one proxy hop (Replit's edge) so the per-client API rate limits (900 reads and 180 writes a minute) are keyed on the real client address; if you ever put another proxy in front of it, adjust the `trust proxy` setting in `server/app.ts`.
 
 Configure Replit Secrets:
 
@@ -40,11 +40,19 @@ Configure Replit Secrets:
 | `APP_ORIGINS` | Optional. Comma-separated exact allowed HTTPS origins, without trailing slashes; defaults to the Replit deployment/development domains |
 | `BOOTSTRAP_ADMIN_EMAILS` | Verified primary email address(es) of the initial administrator(s); `BOOTSTRAP_ADMIN_IDS` (Clerk user IDs) also works. Remove after provisioning |
 | `AI_INTEGRATIONS_*` | Replit AI-integration proxy keys/base URLs for Gemini, Anthropic and OpenAI (managed by Replit) |
-| `ECONOMY_MODEL`, `POWER_MODEL`, `MAX_CLAUDE_MODEL`, `MAX_OPENAI_MODEL` | Exact API model IDs, chosen by the owner |
+| `ECONOMY_MODEL`, `POWER_MODEL`, `MAX_CLAUDE_MODEL`, `MAX_OPENAI_MODEL` | Exact API model IDs, chosen by the owner. These are the defaults; an administrator can override each one from Team & connections (see below) |
 | `UPLOAD_SCAN_COMMAND` | Production only: `scripts/clamav/scan-upload.sh` (in-project ClamAV; `CLAMAV_SIDECAR`, `CLAMAV_RUN_DIR`, `CLAMAV_DB_DIR` tune the sidecar) |
 | `OCCUPATION_DATA_DIR` | Optional. Directory of the bundled occupational datasets (defaults to `data/occupations`) |
 
 Model IDs deliberately have no guessed defaults. Choose exact IDs available to the provider account. The intended Max pairing is Fable + GPT-6 if available through those APIs. Verify both with a small live run before using real material. Models beginning `gemini` use Google, `claude` use Anthropic, and the remaining configured model uses OpenAI Responses.
+
+### Research connections and the research prompt
+
+**Team & connections** shows the four model positions behind the research tiers (Economy → Gemini, Power → Claude, Max → one Claude and one OpenAI analysis of the same captured sources), the model each one currently uses and where that value comes from (the environment variable, or an override saved in this workspace). Administrators can change a model: pick from the list of models the Replit AI integrations documented as available, or type any exact model ID. The provider prefix must match the position (a `gpt-…` ID cannot be saved for the Claude position), and the server sends one short live request to the chosen model before saving anything, so a mistyped or unavailable ID is refused rather than discovered during a research run. "Use environment default" removes the override. Every change is written to the audit log. Overrides live in the workspace record (`settings.models`); the environment variables remain the defaults for a new workspace.
+
+The same page shows the research prompt: the instructions every run sends before the evidence. Anyone can read them; administrators can edit them, save a new version or reset to the built-in default. The output contract (the JSON shape the worker parses) and the evidence framing are fixed and appended by the server, and are shown read-only below the editor. The prompt has a monotonic version (0 is the built-in default); each research run records the version it used (`promptVersion`), and a save is refused with 409 if someone else changed the prompt since the page was opened.
+
+Activity candidates are parked for now: the default prompt asks the models not to propose activities, the UI no longer shows the activities section, and readiness no longer requires an accepted activity. The data model, API routes and pack exports keep the field so existing packs remain valid.
 
 ### Clerk SSO
 
@@ -77,13 +85,15 @@ Two official datasets are bundled as versioned JSON in `data/occupations/` and l
 
 Each role profile carries a review state: any member can send it for review or return it to draft; only reviewers and administrators can mark it *ready*, and only when the readiness checks pass. A content fingerprint is stored at that point, so any later change to the role, organisation, findings, activities or questions returns the profile to draft. Ready snapshots can only be created from a profile that is currently ready; drafts can be created at any time.
 
+Reviewers and administrators can delete a role ("Delete role" on the role card). The confirmation lists what goes with it: findings, questions, activities and research runs scoped to that role. Organisation-wide findings and questions are untouched and sources stay with the organisation (they are simply no longer linked to the role). The deletion is written to the audit log. A role that already has a research pack cannot be deleted, because packs are immutable delivery records, and a queued or running research run must be cancelled first.
+
 Captured web pages can be refreshed. The earlier capture is never modified (existing quotations keep referring to it); a new capture is recorded with `supersedes`/`supersededBy` links and a stored sentence-level summary of what was added and removed (`captureDiff`). Findings citing any earlier capture of the page whose exact quotation newly disappears are flagged "Source changed — re-review" and block readiness until they are reviewed again; their version is bumped so a review opened before the refresh cannot be saved over the change. A refresh that finds no text change leaves a ready role profile ready.
 
 ## Export contract
 
 Pack revision and schema version are separate. `schemaVersion: 1.0.0` is described by [research-pack.schema.json](docs/research-pack.schema.json); TypeScript shapes are in `shared/types.ts`. IDs are stable UUIDs. JSON and Markdown derive from the exact same saved snapshot. Markdown includes complete JSON metadata to preserve parity. Uploaded binary files are not embedded in packs; sources retain metadata and captured text. Keep the original assets available separately.
 
-A ready pack includes accepted findings and activities; blocking questions must be answered and pending reviews resolved. Non-blocking questions travel with the pack. Employer approval is always false. Database triggers reject snapshot updates/deletes. Later edits require a new revision. Retention/erasure policy and privileged operational deletion remain deployment decisions.
+A ready pack includes accepted findings (and any accepted activities, when that section is in use); blocking questions must be answered and pending reviews resolved. Non-blocking questions travel with the pack. Employer approval is always false. Database triggers reject snapshot updates/deletes. Later edits require a new revision. Retention/erasure policy and privileged operational deletion remain deployment decisions.
 
 ## Verification
 
