@@ -39,6 +39,19 @@ StreamMaxLength 25M
 MaxScanSize 100M
 EOF
 
+# A previous run that was killed rather than stopped can leave its clamd
+# (about 1 GB of memory) and freshclam behind. Stop them before starting new
+# ones; the PID file is trusted only if that PID is still the named program.
+for name in clamd freshclam; do
+  pid=$(cat "$RUN_DIR/$name.pid" 2>/dev/null || true)
+  if [ -n "$pid" ] && [ "$(cat "/proc/$pid/comm" 2>/dev/null)" = "$name" ]; then
+    echo "[clamav] stopping leftover $name (pid $pid) from a previous run"
+    kill "$pid" 2>/dev/null || true
+    for _ in $(seq 1 20); do kill -0 "$pid" 2>/dev/null || break; sleep 0.5; done
+  fi
+  rm -f "$RUN_DIR/$name.pid"
+done
+
 if ! ls "$DB_DIR"/main.c?d >/dev/null 2>&1; then
   echo "[clamav] downloading virus signatures into $DB_DIR (first start)"
   freshclam --config-file="$RUN_DIR/freshclam.conf" || true

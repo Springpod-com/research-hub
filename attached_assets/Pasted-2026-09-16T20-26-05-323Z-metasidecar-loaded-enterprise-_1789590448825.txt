@@ -1,0 +1,101 @@
+2026-09-16T20:26:05.323Z metasidecar: loaded enterprise status from environment is_enterprise=false
+2026-09-16T20:26:05.324Z starting artifact processes for monorepo deployment
+2026-09-16T20:26:05.325Z forwarding local port 0 to external port 80 (mapped as 1104)
+2026-09-16T20:26:05.325Z waiting for artifact servers to listen on their configured ports timeout_seconds=60 ports=[24507]
+2026-09-16T20:26:05.327Z healthcheck failed error=healthcheck /: Get "http://127.0.0.1:1104/": dial tcp 127.0.0.1:1104: connect: connection refused
+2026-09-16T20:26:05.331Z starting artifact processes count=1
+2026-09-16T20:26:05.334Z starting artifact server on its configured port artifact=artifacts/organisation-research port=24507
+2026-09-16T20:26:05.340Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:05.344Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:05.350Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:05.402Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:05.484Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:05.657Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:05.821Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:07.029Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:07.744Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:08.867Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:11.127Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:11.332Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:11.365Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:12.273Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:12.305Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:12.637Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:13.165Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:14.134Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:15.430Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:16.767Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:17.279Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:18.679Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:19.003Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:19.668Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:20.247Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:20.785Z > scripts/start-production.sh
+2026-09-16T20:26:20.785Z > @workspace/organisation-research@1.0.0 start /home/runner/workspace/artifacts/organisation-research
+2026-09-16T20:26:22.038Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:22.708Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:23.497Z [clamav] starting clamd on /tmp/organisation-research-clamav/clamd.sock
+2026-09-16T20:26:23.676Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:25.626Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:26.008Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:26.870Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:27.680Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:28.099Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:30.001Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:31.797Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:33.407Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:33.459Z ClamAV update process started at Wed Sep 16 20:26:33 2026
+2026-09-16T20:26:33.467Z WARNING: Local version: 1.4.3 Recommended version: 1.4.6
+2026-09-16T20:26:33.467Z DON'T PANIC! Read https://docs.clamav.net/manual/Installing.html
+2026-09-16T20:26:33.467Z WARNING: Your ClamAV installation is OUTDATED!
+2026-09-16T20:26:33.982Z daily.cvd database is up-to-date (version: 28125, sigs: 355664, f-level: 90, builder: svc.clamav-publisher)
+2026-09-16T20:26:33.983Z bytecode.cvd database is up-to-date (version: 339, sigs: 80, f-level: 90, builder: nrandolp)
+2026-09-16T20:26:33.983Z main.cvd database is up-to-date (version: 63, sigs: 3287027, f-level: 90, builder: tomjudge)
+2026-09-16T20:26:35.285Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:36.931Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:38.552Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:39.032Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:40.363Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:40.562Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:40.980Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:41.010Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:42.660Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:44.214Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:45.575Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:46.761Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:48.719Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:50.259Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:51.557Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:52.339Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:54.142Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:54.712Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:55.010Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:55.245Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:56.919Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:58.342Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:26:58.698Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:27:00.617Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:27:02.270Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:27:03.185Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:27:03.587Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:27:05.423Z artifact did not open its configured port before the startup timeout; check application logs, ensure the server uses PORT, and verify the port in artifact.toml artifact=artifacts/organisation-research port=24507 timeout_seconds=60
+2026-09-16T20:27:05.547Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:27:05.795Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:27:06.083Z Command failed with signal "SIGTERM"
+2026-09-16T20:27:06.083Z  ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL  @workspace/organisation-research@1.0.0 start: `scripts/start-production.sh`
+2026-09-16T20:27:06.083Z /home/runner/workspace/artifacts/organisation-research:
+2026-09-16T20:27:06.237Z - If you want libpq compatibility now, use 'uselibpqcompat=true&sslmode=require'
+2026-09-16T20:27:06.237Z (node:55) Warning: SECURITY WARNING: The SSL modes 'prefer', 'require', and 'verify-ca' are treated as aliases for 'verify-full'.
+2026-09-16T20:27:06.237Z (Use `node --trace-warnings ...` to show where the warning was created)
+2026-09-16T20:27:06.237Z See https://www.postgresql.org/docs/current/libpq-ssl.html for libpq SSL mode definitions.
+2026-09-16T20:27:06.237Z - If you want the current behavior, explicitly use 'sslmode=verify-full'
+2026-09-16T20:27:06.237Z To prepare for this change:
+2026-09-16T20:27:06.237Z In the next major version (pg-connection-string v3.0.0 and pg v9.0.0), these modes will adopt standard libpq semantics, which have weaker security guarantees.
+2026-09-16T20:27:07.149Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:27:07.476Z healthcheck failed error=healthcheck / returned status 500
+2026-09-16T20:27:07.856Z Organisation Research is listening. Allowed origins: https://organisation-research.replit.app
+2026-09-16T20:27:08.802Z Wed Sep 16 20:27:08 2026 -> Limits: Global size limit set to 104857600 bytes.
+2026-09-16T20:27:08.802Z Wed Sep 16 20:27:08 2026 -> Limits: Global time limit set to 120000 milliseconds.
+2026-09-16T20:27:15.463Z timeout waiting for artifact processes, sending SIGKILL
+2026-09-16T20:27:15.503Z a port configuration was specified but the required port was never opened
+2026-09-16T20:27:15.503Z a port configuration was specified but the required port was never opened
