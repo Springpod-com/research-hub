@@ -1,0 +1,1 @@
+- [Replit adaptation](replit-adaptation.md) — 24h min package age blocks fresh deps (pin back, don't exclude); API fixed on 3001 in dev; DB guard flag; VM deployment target.

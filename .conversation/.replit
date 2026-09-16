@@ -1,0 +1,11 @@
+run = "npm run dev"
+modules = ["nodejs-22"]
+
+[deployment]
+build = ["sh", "-c", "npm ci && npm run build && npm run audit"]
+run = ["sh", "-c", "PORT=5173 npm start"]
+deploymentTarget = "vm"
+
+[[ports]]
+localPort = 5173
+externalPort = 80

@@ -1,0 +1,39 @@
+kind = "web"
+previewPath = "/"
+title = "Organisation Research"
+description = "Springpod's internal organisation and role research workspace. Researchers collect employer evidence from public pages and uploaded documents, run tiered AI research, review quotations and classifications, record client questions, match roles to official occupational data, and export immutable research packs as Markdown and JSON for storyboard drafting. Access is restricted to approved team members via Clerk SSO."
+version = "1.0.0"
+id = "artifacts/organisation-research"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 24507
+
+[services.development]
+# Vite serves the frontend on PORT and proxies /api to the private API on 127.0.0.1:3001.
+run = "pnpm --filter @workspace/organisation-research run dev"
+
+[services.production]
+
+[services.production.build]
+# Type-check, build the frontend, then run the Springpod design-system audit (must exit 0).
+args = [ "pnpm", "--filter", "@workspace/organisation-research", "run", "build:production" ]
+
+[services.production.build.env]
+NODE_ENV = "production"
+
+[services.production.run]
+# One Express process serves the built frontend, the /api routes and the embedded research worker.
+args = [ "pnpm", "--filter", "@workspace/organisation-research", "run", "start" ]
+
+[services.production.run.env]
+PORT = "24507"
+NODE_ENV = "production"
+
+[services.production.health.startup]
+path = "/api/health"
+
+[services.env]
+PORT = "24507"

@@ -1,0 +1,51 @@
+# Implementation status — 16 September 2026
+
+## What is built
+
+This is an executable, standalone MVP, with a React frontend, authenticated API, persistent storage, a bounded research worker, evidence review and immutable exports. No Employer Intelligence backend, database or production system was used.
+
+| Requirement | Current implementation | Remaining work or limit |
+| --- | --- | --- |
+| FR-01 Organisations | Create/edit, search/filter/sort, division scope, duplicate name/domain guard | Likely-match suggestions before submission are not implemented; duplicates are rejected with a named match |
+| FR-02 Role scope | Employer title, location, seniority, responsibilities, boundaries | Country belongs to organisation; unknowns remain explicit |
+| FR-03 Public research | Homepage plus up to three relevant same-origin links; manual URL capture; stored excerpts/dates; durable queue, cancellation and partial failure reporting | No search-engine discovery; live provider/network run still needs deployment credentials |
+| FR-04 Uploads | PDF/DOCX/TXT and PNG/JPEG; type/size validation; PDF page markers; empty-text warnings | No OCR; production scanner must be provisioned; extraction under hostile production workloads needs operational review |
+| FR-05 Evidence | Exact source quotations, stable source references, same-organisation checks, recorded statements | Exact quotation validates provenance, not the semantic truth of the claim; human review remains necessary |
+| FR-06 Classification | Employer facts, occupation context and proposals in UI/exports | User-supplied classification remains reviewable |
+| FR-07 Review | Edit claim/category/notes, accept, exclude, request clarification; previous content and reviewer recorded | Conflict resolution is human review; no automated adjudication |
+| FR-08 Occupation matching | Official reference links and manual structured matches with code, title, scheme, source URL, rationale, version and proposed/reviewed state | Automatic candidate matching is not implemented |
+| FR-09 Occupational context | Manual activities, skills, knowledge and work context; can capture/upload dataset passages in evidence | Automatic occupational dataset retrieval is not implemented |
+| FR-10 Questions | Create, answer with provenance, defer, route to client, assignee; blocking questions gate readiness | Clients provide answers through the team; no outbound messaging |
+| FR-11 Activities | Model prompt requests six to eight proposals when evidence supports them; human/manual proposals and accept/exclude | Counts are not padded when evidence is insufficient. Max may retain separate proposals from both models; no semantic merge |
+| FR-12 Research pack | Reviewed role/organisation, classified findings, source register, occupations, activities, questions and limitations | Pack states are draft/ready; there is no separate in-review state. Workplace/shift narrative is not automatically assembled |
+| FR-13 Exports | Versioned Markdown and JSON generated from one snapshot, stable IDs/schema | Binary source assets are referenced, not bundled |
+| FR-14 History | Prior finding text/status/reviewer; audit events; new source captures; optimistic edits; SQL-enforced immutable packs | No automatic source-refresh diff or affected-pack notification; all historical snapshots remain unchanged |
+| FR-15 Clerk | Clerk browser/server integration, approved members and researcher/reviewer/admin permissions, production configuration guard | Actual organisational SSO, domains, membership and live denial tests must be configured/verified in Replit |
+
+## Frontend reuse
+
+The starter's README, implementation guidance and dependency guidance were read before implementation. Only its portable `research-workspace-page.tsx`, `table-kit.ts` and stylesheet pattern were reused (formatting may differ). Reference screens informed layout and evidence-panel patterns; the old application and its backend dependencies were not copied. All UI primitives, icons and toast facilities come from `@springpod/design-system` v0.2.0. The main stylesheet is its single import. Bundled Poppins and other package fonts are in the production build; no external font links are used.
+
+## Local verification
+
+- Automated tests: 19 passed. Cover failed-closed setup, untrusted origins, exact quotes, cross-organisation evidence, readiness gates, review history, stale updates, answer provenance, role restrictions, invalid uploads, JSON/Markdown parity, increasing pack revisions, SQL snapshot immutability, private/reserved network address rejection, and one-provider failure with partial-result retention and invented-quote rejection.
+- TypeScript check passed.
+- `npx springpod-audit src` passed with exit code 0.
+- Production frontend build passed. Vite reports a non-blocking large-JavaScript-chunk warning; route splitting is a future performance improvement.
+- Browser journey completed using the clearly labelled fictional preview: directory → organisation → inspect exact evidence → accept finding → accept activity → create a ready snapshot. Desktop layout visually inspected.
+- Tests use embedded PostgreSQL-compatible PGlite and mocked AI responses. They are not tests against deployed PostgreSQL, a real identity provider or live AI services.
+
+## Live setup still required
+
+New PostgreSQL database and backups; Clerk organisational SSO and approved membership; exact model IDs and keys; Replit origin/domain settings; production file scanning; small live research run; production access-denial checks; mobile/tablet and keyboard acceptance review. Deployment is not complete and production readiness is not asserted.
+
+## Product extensions deliberately not claimed
+
+- Two independent web-discovery runs: current Max performs independent analyses of shared captured sources.
+- AI workplace-image interpretation: current images have inspection, contextual notes and permissions only.
+- Organisation logo assignment: images and brand guidance can be recorded, but no dedicated selected-logo control exists.
+- Automatic semantic deduplication, conflicting-claim detection or reconciliation.
+- Estimated currency cost, provider budgets, source-retention/erasure workflow or per-organisation access policies. The current product is one approved internal team workspace.
+- Cross-app synchronisation, the Employer Intelligence field catalogue and approval machinery, or automated Studio delivery.
+
+Agree retention/erasure policy before real data is loaded. Immutable snapshots contain copied research text; deleting a source alone would not erase that text. The current app intentionally provides no casual deletion button.
