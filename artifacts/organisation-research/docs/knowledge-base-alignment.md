@@ -253,12 +253,53 @@ do not.
 | Brand guidance and asset notes | Brand (section 5) | |
 | Workplace image | Media (section 4) | |
 
-## 9. Order of work
+## 9. Research workflow
+
+Today the workflow is: add sources (one flat list, filtered only by role) →
+press Research (focus and tier only; the run takes the newest sixteen readable
+sources after crawling the website) → review a flat list of findings, one card
+at a time, filtered only by review status → readiness checklist → pack. The
+researcher is never told what the document still needs.
+
+Proposed: the six folders become the unit of work for each organisation.
+
+- **Sections view.** The Evidence tab is organised by the six sections, each
+  showing its places (the slots of §4.2) as filled or empty, e.g. "The
+  organisation 5/7 · The role 2/8 · Case material 0/6 · Media 0 · Brand 1/7 ·
+  Supplied by the organisation 0". The template's own prompts ("sites",
+  "shift pattern", "safety rules people actually follow") are the checklist;
+  nothing has to be written for it. Role scope works as now within the role,
+  case-material and media sections.
+- **Sources belong to a section.** Adding a source (capture, upload,
+  statement, film, screenshot) asks which section it belongs to, defaulting
+  from its kind and verification; the list can be filtered by section, tier
+  and rights, and shows the export file name.
+- **Runs fill gaps.** Start research chooses the section(s) to fill (default:
+  those with empty places), the focus and the tier. The run brief lists the
+  empty places and the sources in that section (plus the organisation section
+  for context), and the researcher can untick sources rather than getting the
+  newest sixteen. Results land in the section they were asked for.
+- **Review by section.** Findings filter by section, tier, source and run;
+  the existing server bulk review gains buttons (accept all in a section,
+  exclude a run). A question answered by the organisation can be turned into
+  a tier-1 fact in one step, placed in the section it answers.
+- **Gap list is the brief.** "What is missing" is computed from empty places
+  and unverified rows, shown per section, and is the same list a run is given
+  and the same list that becomes "For the organisation to confirm".
+
+Not proposed: categorising sources by chapter or chapter part. One source
+usually serves several parts, so the link to the chapter stays on the fact
+(`parts`, §4.4), and the sections stay fixed at the template's six so that the
+app, the folder on disk and the document agree. Free tags can be added later
+if a team needs its own grouping.
+
+## 10. Order of work
 
 1. **Tiers, slots, parts, verification and terminology** (model, defaults for
-   existing data, UI labels and badges, Markdown export in eight sections,
-   pack 2.0.0, the repo copy of the template with the word changes). Existing
-   packs untouched.
+   existing data, UI labels and badges, sections view with fill state, sources
+   assigned to sections, research runs scoped to a section, Markdown export in
+   eight sections, pack 2.0.0, the repo copy of the template with the word
+   changes). Existing packs untouched.
 2. **Structured rows and the new references**: forms and validation for the ten
    table slots; apprenticeship standard, NCS, professional body, interview,
    fact checker, may-use / must-not-say; research-run contract and brief
