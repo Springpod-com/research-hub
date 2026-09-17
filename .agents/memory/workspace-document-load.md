@@ -11,4 +11,6 @@ ETag rule: the `/api/workspace` tag = process boot prefix + commit revision + ro
 
 Client polling: 12 s idle, 3 s while a run is active; overlapping reloads are resolved by "latest started wins" (a generation counter), otherwise an older response can put stale data back.
 
+VM resized on 2026-09-17 from 0.5 vCPU / 2 GB to 8 GB after the ClamAV hang below; the scanner settings stay in place regardless of size.
+
 ClamAV on the 2 GB VM: clamd alone is ~990 MB RSS (measured, 1.4.3 with main+daily+bytecode). Anything that holds two signature sets at once hangs the whole VM for many minutes with no log output (health check included): freshclam's default TestDatabases (loads the new DB in-process, ~1 GB), clamd's default ConcurrentDatabaseReload, or starting the updater while clamd is still loading. The daemon script therefore sets TestDatabases no, ConcurrentDatabaseReload no, Checks 1, and starts freshclam only after clamd's socket exists plus a delay. Note freshclam still prints "Testing database:" unconditionally (cosmetic; the real load is skipped). Never `pkill -f` a pattern that appears in your own shell command line — it kills the shell.

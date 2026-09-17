@@ -6,8 +6,9 @@
 #    VM's CPU and about 1 GB of memory for up to a minute; when that overlapped
 #    the app's own start-up, the platform's 60-second port check failed and
 #    the VM was restarted in a loop. Uploads are refused until clamd is ready.
-#    The VM has 2 GB in total: see scripts/clamav/clamav-daemon.sh for why the
-#    scanner must never hold two copies of its signatures at once.
+#    Memory is shared with the app (the VM ran on 2 GB until 2026-09-17, 8 GB
+#    since): see scripts/clamav/clamav-daemon.sh for why the scanner must
+#    never hold two copies of its signatures at once.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export NODE_ENV=production

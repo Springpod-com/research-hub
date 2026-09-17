@@ -1,4 +1,4 @@
 - [Replit adaptation](replit-adaptation.md) — package min-age pins, dev port split, DB guard, VM target, AI-proxy quirks, ClamAV RAM, managed-Clerk proxy, trust-proxy hop, detached shells die.
 - [Review, refresh and match rules](review-refresh-rules.md) — readiness fingerprint scope, per-quotation refresh flagging across lineage, server-hydrated dataset matches.
 - [Signed-in UI verification](ui-verification.md) — swap the dev API child for the fixture preview server to screenshot authenticated pages.
-- [Workspace document load & VM capacity](workspace-document-load.md) — keep bulk bytes out of the workspace JSON row; per-user ETag rule; e2-small VM + ClamAV is the real ceiling.
+- [Workspace document load & VM capacity](workspace-document-load.md) — keep bulk bytes out of the workspace JSON row; per-user ETag rule; VM was 2 GB (ClamAV ~1 GB) until 2026-09-17, now 8 GB; scanner memory rules.

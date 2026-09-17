@@ -4,8 +4,9 @@
 # - Signatures live in $CLAMAV_DB_DIR (default: <app>/.data/clamav/db) and are
 #   downloaded with freshclam on first start, then refreshed once a day by a
 #   background freshclam that tells clamd to reload.
-# - Memory is the constraint. clamd holds about 1 GB of signatures; the VM has
-#   2 GB in total, shared with the app. So nothing may double that footprint:
+# - Memory is the constraint. clamd holds about 1 GB of signatures, shared
+#   with the app on one VM (2 GB when this was written; 8 GB since
+#   2026-09-17). Nothing may double that footprint:
 #   freshclam does not test-load a downloaded database (that is another
 #   ~1 GB), clamd reloads by dropping the old engine before loading the new
 #   one rather than running both, and the updater is only started once clamd
