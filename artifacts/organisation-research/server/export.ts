@@ -502,6 +502,9 @@ export function packZipName(pack: Pack) {
 const sourceText = (source: Source) =>
   [
     source.title ? `Title: ${source.title}` : "",
+    source.kind === "note" && source.extractedFrom
+      ? `Extracted from: ${source.extractedFrom}`
+      : "",
     source.url ? `URL: ${source.url}` : "",
     `Retrieved: ${source.retrievedAt.slice(0, 10)}`,
     "",

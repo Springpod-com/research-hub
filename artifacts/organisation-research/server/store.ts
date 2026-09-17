@@ -2,7 +2,77 @@ import { PGlite } from "@electric-sql/pglite";
 import { Pool, type PoolClient } from "pg";
 import { mkdir } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { emptyWorkspace, type Workspace, type Pack } from "../shared/types.js";
+import {
+  emptyWorkspace,
+  sections,
+  slots,
+  type SectionStatus,
+  type Workspace,
+  type Pack,
+} from "../shared/types.js";
+const SECTION_STATUS_MIGRATION = "section-status-from-placed-facts-v1";
+
+/** Backfill only legacy placed facts; new workspaces retain gathering defaults. */
+export function migrateSectionStatus(
+  workspace: Workspace,
+  at = new Date().toISOString(),
+): boolean {
+  workspace.migrations ||= [];
+  if (workspace.migrations.includes(SECTION_STATUS_MIGRATION)) return false;
+  const extracted = (): SectionStatus => ({
+    stage: "extracted",
+    by: "migration",
+    at,
+  });
+  const placed = workspace.findings.filter(
+    (finding) => finding.review !== "rejected" && finding.slot && finding.slot !== "none",
+  );
+  for (const organisation of workspace.organisations) {
+    for (const section of sections.filter((item) => !item.roleScoped)) {
+      if (organisation.sectionStatus?.[section.section]) continue;
+      const sectionSlots = new Set(
+        slots
+          .filter((slot) => slot.section === section.section)
+          .map((slot) => slot.slot),
+      );
+      if (
+        placed.some(
+          (finding) =>
+            finding.orgId === organisation.id &&
+            sectionSlots.has(finding.slot as never),
+        )
+      ) {
+        organisation.sectionStatus ||= {};
+        organisation.sectionStatus[section.section] = extracted();
+      }
+    }
+    for (const role of workspace.roles.filter(
+      (item) => item.orgId === organisation.id,
+    )) {
+      for (const section of sections.filter((item) => item.roleScoped)) {
+        if (role.sectionStatus?.[section.section]) continue;
+        const sectionSlots = new Set(
+          slots
+            .filter((slot) => slot.section === section.section)
+            .map((slot) => slot.slot),
+        );
+        if (
+          placed.some(
+            (finding) =>
+              finding.orgId === organisation.id &&
+              (!finding.roleId || finding.roleId === role.id) &&
+              sectionSlots.has(finding.slot as never),
+          )
+        ) {
+          role.sectionStatus ||= {};
+          role.sectionStatus[section.section] = extracted();
+        }
+      }
+    }
+  }
+  workspace.migrations.push(SECTION_STATUS_MIGRATION);
+  return true;
+}
 export interface SQL {
   query(sql: string, values?: unknown[]): Promise<{ rows: any[] }>;
 }
@@ -58,6 +128,7 @@ export class Store {
       ["main", JSON.stringify(emptyWorkspace())],
     );
     await this.moveFilesOutOfWorkspace();
+    await this.transact((workspace) => migrateSectionStatus(workspace));
   }
   // Earlier versions stored each upload as base64 inside its source record.
   // Move any that remain into research_files, once, on start-up.

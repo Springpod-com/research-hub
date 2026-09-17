@@ -756,7 +756,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
       const data = z
         .object({
           title: z.string().trim().min(1).max(200),
-          text: z.string().min(1).max(100000),
+          text: z.string().min(1).max(200000),
           kind: z.enum([
             "statement",
             "occupation",
@@ -766,7 +766,9 @@ export function createApp(store: Store, options: AppOptions = {}) {
             "screenshot",
             "standard",
             "guidance",
+            "note",
           ]),
+          extractedFrom: z.string().trim().max(2000).optional(),
           url: z.string().default(""),
           roleIds: z.array(z.string().uuid()).default([]),
           permission: z
@@ -790,7 +792,30 @@ export function createApp(store: Store, options: AppOptions = {}) {
           timecode: z.string().trim().max(100).optional(),
           providedBy: providedByField.optional(),
         })
+        .superRefine((value, context) => {
+          if (value.kind === "note" && !value.extractedFrom)
+            context.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["extractedFrom"],
+              message: "Record where this note was extracted from.",
+            });
+          if (value.kind !== "note" && value.text.length > 100000)
+            context.addIssue({
+              code: z.ZodIssueCode.too_big,
+              maximum: 100000,
+              inclusive: true,
+              origin: "string",
+              path: ["text"],
+              message: "Text must contain at most 100000 characters.",
+            });
+        })
         .parse(req.body);
+      if (data.kind === "note") {
+        data.folder ||= "01-organisation";
+        data.tier ??= 2;
+        data.tierReason ||=
+          `Team note; extracted from ${data.extractedFrom}`;
+      }
       requireTierReason(data);
       if (data.url && !/^https?:\/\//.test(data.url))
         throw new HttpError(422, "Use a HTTP(S) source URL.");
@@ -1164,6 +1189,65 @@ export function createApp(store: Store, options: AppOptions = {}) {
         `attachment; filename="${(s.filename || "source").replace(/[^a-zA-Z0-9._-]/g, "_")}"`,
       );
       res.send(data);
+    }),
+  );
+  app.put(
+    "/api/orgs/:orgId/sections/:section/status",
+    handler(async (req, res) => {
+      const section = sections.find(
+        (item) => item.section === String(req.params.section),
+      );
+      if (!section) throw new HttpError(404, "Section not found.");
+      const data = z
+        .object({
+          stage: z.enum(["gathering", "complete", "reviewed"]),
+          roleId: z.string().uuid().optional(),
+        })
+        .parse(req.body);
+      if (section.roleScoped && !data.roleId)
+        throw new HttpError(422, "A role is required for this section.");
+      if (!section.roleScoped && data.roleId)
+        throw new HttpError(
+          422,
+          "A role is not allowed for an organisation-wide section.",
+        );
+      res.json(
+        await mutate(req, res, (w, member) => {
+          const orgId = String(req.params.orgId);
+          roleInOrg(w, orgId, data.roleId);
+          const summary = sectionsView(w, orgId, data.roleId).sections.find(
+            (item) => item.section === section.section,
+          )!;
+          if (
+            data.stage === "reviewed" &&
+            !["reviewer", "admin"].includes(member.role)
+          )
+            throw new HttpError(
+              403,
+              "A reviewer or administrator must mark a folder reviewed.",
+            );
+          if (data.stage === "reviewed" && summary.unreviewed)
+            throw new HttpError(
+              422,
+              `This folder has ${summary.unreviewed} unreviewed ${summary.unreviewed === 1 ? "fact" : "facts"}.`,
+            );
+          const subject = section.roleScoped
+            ? get(w.roles, data.roleId!)
+            : get(w.organisations, orgId);
+          subject.sectionStatus ||= {};
+          subject.sectionStatus[section.section] = {
+            stage: data.stage,
+            by: member.userId,
+            at: now(),
+          };
+          subject.version++;
+          subject.updatedAt = now();
+          audit(w, member.userId, "section.status", subject.id);
+          return sectionsView(w, orgId, data.roleId).sections.find(
+            (item) => item.section === section.section,
+          );
+        }),
+      );
     }),
   );
   app.patch(
@@ -1694,12 +1778,34 @@ export function createApp(store: Store, options: AppOptions = {}) {
           tier: z.enum(["economy", "power", "max"]),
           sections: z.array(z.enum(sections.map((section) => section.section) as [string, ...string[]])).max(6).optional(),
           sourceIds: z.array(z.string().uuid()).max(16).optional(),
+          crawl: z.boolean().optional(),
         })
         .parse(req.body);
       res.status(202).json(
         await mutate(req, res, (w, m) => {
           const orgId = String(req.params.id);
           roleInOrg(w, orgId, data.roleId);
+          if (data.sections?.length) {
+            const summaries = sectionsView(w, orgId, data.roleId).sections;
+            for (const sectionId of data.sections) {
+              const section = sections.find(
+                (item) => item.section === sectionId,
+              )!;
+              if (section.roleScoped && !data.roleId)
+                throw new HttpError(
+                  422,
+                  `${section.title} requires a role from this organisation.`,
+                );
+              const summary = summaries.find(
+                (item) => item.section === sectionId,
+              )!;
+              if (summary.status.stage === "gathering")
+                throw new HttpError(
+                  422,
+                  `${section.title}: Mark the folder complete first.`,
+                );
+            }
+          }
           if (data.sourceIds)
             for (const id of data.sourceIds) {
               const source = w.sources.find((item) => item.id === id);

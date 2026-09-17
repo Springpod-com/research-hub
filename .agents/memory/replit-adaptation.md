@@ -31,6 +31,8 @@ description: Non-obvious constraints met while porting the supplied Organisation
 
 - **Deployments sit behind one proxy hop.** Express apps must `set("trust proxy", 1)` or `req.ip` is the edge address and every user shares one rate-limit bucket (express-rate-limit logs ERR_ERL_UNEXPECTED_X_FORWARDED_FOR in deployment logs). Verify live by reading `ratelimit-remaining` on a first request: anything below limit-1 means the bucket is shared.
 
+- **Test suite boots one embedded Postgres per file.** With file parallelism the 60 s hook timeout failed whole files whenever the VM was slow (2026-09-17 a 3e8 JS loop took 6 s; sys time dominated). Vitest is now sequential with a 120 s hook timeout; a full run is ~3 minutes. Don't "fix" hook timeouts by trimming tests — check `uptime` and rerun.
+
 ## Production deployment logs can look alive while the app is dead (2026-09-16)
 
 The ClamAV sidecar keeps writing "SelfCheck: Database status OK" every 10 minutes after the Node process has exited, so those lines prove nothing about the app. Check for a `pg` "Connection terminated unexpectedly" stack or an `ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL … start` line, and curl `/api/health` on the production domain (a fast 500 on every path, including `/`, is the platform answering for a process that is not listening).

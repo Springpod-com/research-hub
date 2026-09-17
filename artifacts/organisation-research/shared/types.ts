@@ -99,6 +99,12 @@ export interface SectionSummary {
   total: number;
   sourceIds: string[];
   gaps: string[];
+  /** Folder status in scope; gathering when never set. */
+  status: SectionStatus;
+  /** Sources added to the folder after the last extraction. */
+  addedSinceExtraction: number;
+  /** Facts in scope still to be reviewed (gates "Reviewed"). */
+  unreviewed: number;
 }
 export interface SectionsResponse {
   sections: SectionSummary[];
@@ -110,6 +116,23 @@ export interface Verified {
   note?: string;
 }
 export type Rights = "organisation-supplied" | "press-kit" | "reference-only";
+/**
+ * Folder-first workflow (docs/knowledge-base-alignment.md §9): a section's
+ * folder is gathered, marked complete, extracted into facts, then reviewed.
+ * Absent = gathering. "extracted" is set by the research worker only.
+ */
+export type SectionStage = "gathering" | "complete" | "extracted" | "reviewed";
+export const sectionStageNames: Record<SectionStage, string> = {
+  gathering: "Gathering",
+  complete: "Folder complete",
+  extracted: "Extracted",
+  reviewed: "Reviewed",
+};
+export interface SectionStatus {
+  stage: SectionStage;
+  by: string;
+  at: string;
+}
 export type Permission =
   "research-only" | "awaiting-confirmation" | "learner-approved";
 export interface Base {
@@ -139,6 +162,8 @@ export interface Organisation extends Base {
   /** Names we may use and things we must not say; each must cite a tier-1 source. */
   mayUse?: Attributed[];
   mustNotSay?: Attributed[];
+  /** Folder status of the organisation-wide sections (organisation, brand, supplied). */
+  sectionStatus?: Partial<Record<Section, SectionStatus>>;
 }
 export interface Attributed {
   text: string;
@@ -270,6 +295,8 @@ export interface Role extends Base {
   professionalBody?: ProfessionalBody;
   /** One interview per pack. */
   interview?: Interview;
+  /** Folder status of the role-scoped sections (role, case, media). */
+  sectionStatus?: Partial<Record<Section, SectionStatus>>;
 }
 export interface Source extends Base {
   orgId: string;
@@ -285,7 +312,11 @@ export interface Source extends Base {
     | "advert"
     | "screenshot"
     | "standard"
-    | "guidance";
+    | "guidance"
+    /** A team-written research note (Markdown) recording what was read and where. */
+    | "note";
+  /** Notes: where the material was extracted from (URL or description). */
+  extractedFrom?: string;
   /** Knowledge-base folder; absent = derived from kind and verification (server view fills it). */
   folder?: Folder;
   /** Tier override with a reason; absent = derived (server view fills `tier`). */
@@ -405,6 +436,8 @@ export interface ResearchJob extends Base {
   sections?: Section[];
   /** Exact readable sources selected for this run. */
   sourceIds?: string[];
+  /** Also read the organisation's website; absent = crawl only when no sources were selected. */
+  crawl?: boolean;
   tier: "economy" | "power" | "max";
   status:
     "queued" | "researching" | "completed" | "gaps" | "failed" | "cancelled";
@@ -462,6 +495,8 @@ export interface Workspace {
   jobs: ResearchJob[];
   members: Member[];
   audit: Audit[];
+  /** Idempotent data migrations already applied to this workspace. */
+  migrations?: string[];
   /** Absent in workspaces stored before research settings existed. */
   settings?: ResearchSettings;
 }

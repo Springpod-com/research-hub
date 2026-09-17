@@ -16,6 +16,7 @@ import type {
   PackV2,
   SectionsResponse,
   Slot,
+  SectionStatus,
 } from "../shared/types.js";
 import {
   sections,
@@ -471,6 +472,11 @@ export function readiness(w: Workspace, orgId: string, roleId: string) {
         )),
   );
   const issues: string[] = [];
+  for (const section of sectionsView(w, orgId, roleId).sections)
+    if (section.filled > 0 && section.status.stage === "gathering")
+      issues.push(
+        `The folder for ${section.title} has facts but was never marked complete.`,
+      );
   if (!role.responsibilities.trim())
     issues.push("Describe the role responsibilities.");
   if (!relevant.some((f) => f.kind === "company" && f.review === "accepted"))
@@ -782,7 +788,11 @@ export function sourceView(source: Source): Source {
       .replace(/^-|-$/g, "")
       .slice(0, 60)
       .replace(/-+$/g, "") || "source";
-  const ext = source.filename?.match(/\.([a-zA-Z0-9]{1,10})$/)?.[1]?.toLowerCase() || "txt";
+  const ext =
+    source.kind === "note"
+      ? "md"
+      : source.filename?.match(/\.([a-zA-Z0-9]{1,10})$/)?.[1]?.toLowerCase() ||
+        "txt";
   const date = /^\d{4}-\d{2}-\d{2}/.exec(source.retrievedAt)?.[0] || "unknown-date";
   return {
     ...source,
@@ -808,6 +818,13 @@ export function sectionsView(
   roleId?: string,
 ): SectionsResponse {
   roleInOrg(w, orgId, roleId);
+  const organisation = get(w.organisations, orgId);
+  const role = roleId ? get(w.roles, roleId) : undefined;
+  const gathering = (): SectionStatus => ({
+    stage: "gathering",
+    by: "",
+    at: "",
+  });
   const relevantFindings = w.findings.filter(
     (f) =>
       f.orgId === orgId &&
@@ -831,6 +848,26 @@ export function sectionsView(
           (!roleId || !source.roleIds.length || source.roleIds.includes(roleId)),
       )
       .map((source) => source.id);
+    const status = section.roleScoped
+      ? role?.sectionStatus?.[section.section] || gathering()
+      : organisation.sectionStatus?.[section.section] || gathering();
+    const unreviewed = relevantFindings.filter(
+      (finding) =>
+        finding.review === "unreviewed" &&
+        slots.some(
+          (slot) =>
+            slot.section === section.section &&
+            slot.slot === (finding.slot || "none"),
+        ),
+    ).length;
+    const addedSinceExtraction =
+      ["extracted", "reviewed"].includes(status.stage)
+        ? w.sources.filter(
+            (source) =>
+              sourceIds.includes(source.id) &&
+              (source.createdAt > status.at || source.updatedAt > status.at),
+          ).length
+        : 0;
     return {
       ...section,
       slots: sectionSlots,
@@ -838,6 +875,9 @@ export function sectionsView(
       total: sectionSlots.length,
       sourceIds,
       gaps: sectionSlots.filter((slot) => !slot.filled).map((slot) => slot.label),
+      status,
+      addedSinceExtraction,
+      unreviewed,
     };
   });
   return {

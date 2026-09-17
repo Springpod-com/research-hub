@@ -27,6 +27,7 @@ it("retains one successful Max run when the second provider fails, excluding inv
     requestedBy: "user_admin",
     attempts: 1,
     runs: [],
+    sections: ["role"] as ("role")[],
   };
   w.jobs.push(job);
   await store.transact((state) => Object.assign(state, w));
@@ -87,6 +88,20 @@ it("retains one successful Max run when the second provider fails, excluding inv
         slot: "role.advert",
         fields: { title: "Coordinator", fileSourceId: "fabricated-source" },
       },
+      {
+        claim: "Brand claim outside the requested folder",
+        kind: "company",
+        citations: [
+          {
+            sourceId: source.id,
+            quote:
+              "Coordinators record quantity differences and prepare a handover for the next shift.",
+            locator: "Paragraph 1",
+          },
+        ],
+        rationale: "Test",
+        slot: "brand.logo",
+      },
     ],
     questions: [],
     activities: [],
@@ -128,6 +143,13 @@ it("retains one successful Max run when the second provider fails, excluding inv
     );
     expect(badReference?.slot).toBe("role.advert");
     expect(badReference?.fields).toBeUndefined();
+    const outside = result.findings.find(
+      (f) => f.claim === "Brand claim outside the requested folder",
+    );
+    expect(outside?.slot).toBe("none");
+    expect(result.jobs[0].errors).toContain(
+      "Fact placed outside the requested folders: brand.logo → left unplaced",
+    );
     expect(result.jobs[0].errors.some((e) => e.includes("excluded"))).toBe(
       true,
     );

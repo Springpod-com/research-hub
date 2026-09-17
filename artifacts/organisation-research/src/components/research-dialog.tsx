@@ -10,6 +10,7 @@ import type {
 import { api } from "../api";
 import * as U from "../ui";
 import { useFormCloseGuard } from "./form-close-guard";
+import { sectionSelectionReason } from "./folder-workflow";
 import {
   TIER_NAME,
   duration,
@@ -54,6 +55,8 @@ export function ResearchDialog({
   sources,
   tiers,
   initialRoleId,
+  initialSection,
+  initialSourceIds,
   onClose,
   onStart,
 }: {
@@ -64,12 +67,15 @@ export function ResearchDialog({
   sources: Pick<Source, "id" | "roleIds" | "title" | "folder" | "retrievedAt">[];
   tiers: Record<string, boolean>;
   initialRoleId?: string;
+  initialSection?: Section;
+  initialSourceIds?: string[];
   onClose: () => void;
   onStart: (
     tier: Tier,
     roleId: string | undefined,
     sections?: Section[],
     sourceIds?: string[],
+    crawl?: boolean,
   ) => Promise<void>;
 }) {
   const [tier, setTier] = useState<Tier>(() => {
@@ -86,12 +92,14 @@ export function ResearchDialog({
   const [sectionData, setSectionData] = useState<SectionsResponse>();
   const [chosenSections, setChosenSections] = useState<Section[]>([]);
   const [sourceIds, setSourceIds] = useState<string[]>([]);
+  const [crawl, setCrawl] = useState(false);
   const [initial] = useState({ tier, scope });
   const dirty =
     tier !== initial.tier ||
     scope !== initial.scope ||
     !!chosenSections.length ||
-    !!sourceIds.length;
+    !!sourceIds.length ||
+    crawl;
   const closeGuard = useFormCloseGuard({ dirty, busy, onClose });
   const roleId = scope === ORG_SCOPE ? undefined : scope;
   useEffect(() => {
@@ -106,9 +114,21 @@ export function ResearchDialog({
       .then((result) => {
         if (!live) return;
         setSectionData(result);
-        const defaults = result.sections
-          .filter((section) => section.gaps.length)
-          .map((section) => section.section);
+        const defaults = initialSection
+          ? result.sections
+              .filter(
+                (section) =>
+                  section.section === initialSection &&
+                  !sectionSelectionReason(section, roleId),
+              )
+              .map((section) => section.section)
+          : result.sections
+              .filter(
+                (section) =>
+                  section.gaps.length &&
+                  !sectionSelectionReason(section, roleId),
+              )
+              .map((section) => section.section);
         setChosenSections(defaults);
       })
       .catch((caught) => {
@@ -117,7 +137,7 @@ export function ResearchDialog({
     return () => {
       live = false;
     };
-  }, [org.id, roleId]);
+  }, [org.id, roleId, initialSection]);
   const eligibleSources = useMemo(() => {
     const folders = new Set(
       (sectionData?.sections || [])
@@ -128,6 +148,9 @@ export function ResearchDialog({
         )
         .map((section) => section.folder),
     );
+    const priority = new Map(
+      (initialSourceIds || []).map((sourceId, index) => [sourceId, index]),
+    );
     return sources
       .filter(
         (source) =>
@@ -137,10 +160,24 @@ export function ResearchDialog({
           !!source.folder &&
           folders.has(source.folder),
       )
-      .sort((a, b) => b.retrievedAt.localeCompare(a.retrievedAt));
-  }, [chosenSections, roleId, sectionData, sources]);
+      .sort((a, b) => {
+        const aPriority = priority.get(a.id);
+        const bPriority = priority.get(b.id);
+        if (aPriority !== undefined || bPriority !== undefined)
+          return (aPriority ?? Number.MAX_SAFE_INTEGER) -
+            (bPriority ?? Number.MAX_SAFE_INTEGER);
+        return b.retrievedAt.localeCompare(a.retrievedAt);
+      });
+  }, [chosenSections, roleId, sectionData, sources, initialSourceIds]);
   useEffect(() => {
-    setSourceIds(eligibleSources.slice(0, 16).map((source) => source.id));
+    const defaults = initialSourceIds
+      ? eligibleSources
+          .filter((source) => initialSourceIds.includes(source.id))
+          .slice(0, 16)
+          .map((source) => source.id)
+      : eligibleSources.slice(0, 16).map((source) => source.id);
+    setSourceIds(defaults);
+    setCrawl(defaults.length === 0);
   }, [eligibleSources.map((source) => source.id).join(",")]);
   const running = jobs.find(
     (j) => j.orgId === org.id && j.roleId === roleId && isActive(j),
@@ -149,7 +186,7 @@ export function ResearchDialog({
     (source) =>
       !source.roleIds.length || !roleId || source.roleIds.includes(roleId),
   ).length;
-  const nothingToRead = !org.website && readable === 0;
+  const nothingToRead = sourceIds.length === 0 && (!crawl || !org.website);
   const configured = TIERS.some((t) => tiers[t.id]);
   return (
     <U.Dialog
@@ -160,7 +197,7 @@ export function ResearchDialog({
     >
       <U.DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-xl">
         <U.DialogHeader>
-          <U.DialogTitle>Start research</U.DialogTitle>
+          <U.DialogTitle>Extract facts and evidence</U.DialogTitle>
           <U.DialogDescription>
             Reads the selected captured sources for {org.name}, then drafts
             facts and questions for the organisation. Nothing is registered
@@ -206,35 +243,57 @@ export function ResearchDialog({
               <U.Skeleton className="h-24 rounded-xl" />
             ) : (
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                {sectionData.sections.map((section) => (
-                  <label
-                    key={section.section}
-                    className="flex items-start gap-2 text-p4"
-                  >
-                    <U.Checkbox
-                      checked={chosenSections.includes(section.section)}
-                      onCheckedChange={(checked) =>
-                        setChosenSections((current) =>
-                          checked
-                            ? [...current, section.section]
-                            : current.filter(
-                                (value) => value !== section.section,
-                              ),
-                        )
-                      }
-                    />
-                    <span>
-                      {section.title}
-                      <span className="block text-p5 text-muted-foreground">
-                        {section.gaps.length} place
-                        {section.gaps.length === 1 ? "" : "s"} to fill
+                {sectionData.sections.map((section) => {
+                  const unavailable = sectionSelectionReason(section, roleId);
+                  return (
+                    <label
+                      key={section.section}
+                      className={U.cn("flex items-start gap-2 text-p4", unavailable && "text-muted-foreground")}
+                    >
+                      <U.Checkbox
+                        checked={chosenSections.includes(section.section)}
+                        disabled={!!unavailable}
+                        onCheckedChange={(checked) =>
+                          setChosenSections((current) =>
+                            checked
+                              ? [...current, section.section]
+                              : current.filter(
+                                  (value) => value !== section.section,
+                                ),
+                          )
+                        }
+                      />
+                      <span>
+                        {section.title}
+                        <span className="block text-p5 text-muted-foreground">
+                          {unavailable ||
+                            `${section.gaps.length} place${section.gaps.length === 1 ? "" : "s"} to fill`}
+                        </span>
                       </span>
-                    </span>
-                  </label>
-                ))}
+                    </label>
+                  );
+                })}
               </div>
             )}
           </fieldset>
+          {!!sectionData && !chosenSections.length && (
+            <p className="text-p5 text-muted-foreground">
+              Choose at least one available folder to extract.
+            </p>
+          )}
+          <label className="flex items-start gap-2 text-p4">
+            <U.Checkbox
+              checked={crawl}
+              disabled={!org.website}
+              onCheckedChange={(checked) => setCrawl(checked === true)}
+            />
+            <span>
+              Also read the organisation&apos;s website
+              <span className="block text-p5 text-muted-foreground">
+                Crawl the public website as well as the folder material selected above.
+              </span>
+            </span>
+          </label>
           {!!sectionData && (
             <div className="space-y-2">
               <p className="text-p4 font-medium">Places to fill</p>
@@ -258,8 +317,10 @@ export function ResearchDialog({
               Sources to read ({sourceIds.length}/16)
             </legend>
             <p className="text-p5 text-muted-foreground">
-              Sources from the chosen sections and The organisation are selected
-              automatically. Untick any the run should not read.
+              Sources from the chosen folders and The organisation are selected
+              automatically, up to 16. For a single folder, its own sources come
+              first, followed by organisation context. Untick any the run should
+              not read.
             </p>
             <div className="max-h-48 overflow-y-auto space-y-2 rounded-xl border border-border p-3">
               {eligibleSources.map((source) => (
@@ -396,17 +457,30 @@ export function ResearchDialog({
               !!running ||
               nothingToRead ||
               !sectionData ||
+              !chosenSections.length ||
               !!sectionsError
             }
             onClick={async () => {
               setBusy(true);
               setError("");
               try {
+                if (!sectionData)
+                  throw new Error("Folders have not finished loading.");
+                const invalidSection = sectionData.sections.find(
+                  (section) =>
+                    chosenSections.includes(section.section) &&
+                    sectionSelectionReason(section, roleId),
+                );
+                if (invalidSection)
+                  throw new Error(
+                    sectionSelectionReason(invalidSection, roleId),
+                  );
                 await onStart(
                   tier,
                   roleId,
                   chosenSections.length ? chosenSections : undefined,
                   sourceIds.length ? sourceIds : undefined,
+                  crawl,
                 );
                 try {
                   localStorage.setItem(REMEMBERED, tier);
@@ -422,7 +496,7 @@ export function ResearchDialog({
             }}
           >
             <U.IconMagicWand size={20} />
-            {busy ? "Starting…" : "Start research"}
+            {busy ? "Starting…" : "Extract facts and evidence"}
           </U.Button>
         </U.DialogFooter>
       </U.DialogContent>

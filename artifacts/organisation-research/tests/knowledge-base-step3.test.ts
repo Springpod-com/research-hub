@@ -69,6 +69,17 @@ describe("knowledge-base Step 3 exports", () => {
     stores.push(store);
     await store.init();
     const pack = packFixture();
+    pack.sources.push({
+      ...pack.sources[0],
+      id: "team-note",
+      kind: "note",
+      title: "Website reading note",
+      text: "# Finding\n\nThe organisation serves the whole country.",
+      extractedFrom: "https://example.org/about",
+      folder: "01-organisation",
+      exportName: "2025-01-02_team_website-reading-note.md",
+      filename: undefined,
+    });
     const archive = await JSZip.loadAsync(await packFolderZip(pack, store));
     for (const folder of [
       "01-organisation",
@@ -84,6 +95,13 @@ describe("knowledge-base Step 3 exports", () => {
     ).toBeTruthy();
     const source = pack.sources[0];
     expect(archive.file(`${source.folder}/${source.exportName}`)).toBeTruthy();
+    const note = archive.file(
+      "01-organisation/2025-01-02_team_website-reading-note.md",
+    );
+    expect(note).toBeTruthy();
+    await expect(note!.async("text")).resolves.toContain(
+      "Extracted from: https://example.org/about",
+    );
   });
 
   it("renders the standalone confirmation table", () => {

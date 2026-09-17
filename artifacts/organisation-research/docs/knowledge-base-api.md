@@ -139,3 +139,31 @@ with the existing layout and 2.0.0 packs as the eight-section document:
 - `GET /api/packs/:id/confirm.md` returns the standalone “For the organisation
   to confirm” table for 2.0.0 packs. A 1.0.0 pack returns 404 because that
   schema has no `toConfirm` register.
+
+## Step 5: folder-first workflow
+
+- `GET /api/orgs/:orgId/sections?roleId=<id>` also returns `status`,
+  `addedSinceExtraction` and `unreviewed` for every section. An unset status is
+  `{stage: "gathering", by: "", at: ""}`. Organisation, brand and supplied
+  status lives on the organisation; role, case and media status lives on the
+  selected role.
+- `PUT /api/orgs/:orgId/sections/:section/status` accepts `{stage, roleId?}`.
+  Researchers may set `gathering` or `complete`. Only reviewers and
+  administrators may set `reviewed`, and only with no unreviewed facts.
+  `extracted` is worker-owned. Role id is required only for role-scoped
+  sections. Every change is audited as `section.status`.
+- `POST /api/organisations/:id/sources` accepts a `note`: Markdown `text`
+  (at most 200,000 characters), `title`, required `extractedFrom`, and an
+  optional folder and tier. Notes default to folder `01-organisation`, tier 2
+  and reason `Team note; extracted from <extractedFrom>`. Their export name
+  ends in `.md`; ZIP content starts with title, extraction provenance and date.
+- Research creation accepts optional `crawl`. The worker crawls when it is
+  `true`, never when it is `false`, and when absent retains the default of
+  crawling only if `sourceIds` was not supplied. Notes are readable evidence.
+- A completed or gaps run marks each requested section `extracted` in its
+  organisation or role scope. A section already `reviewed` is not downgraded;
+  the job instead records `Section <title> was already reviewed; new facts need
+  review`.
+- Readiness blocks a section which has at least one filled place but remains
+  gathering: `The folder for <section> has facts but was never marked
+  complete.`

@@ -302,6 +302,13 @@ export const OUTPUT_CONTRACT =
 /** Fixed: what the worker appends after the contract, described for the settings page. */
 export const CONTEXT_NOTE =
   "Organisation brief (the organisation record), role brief (the role record or null), Places to fill, the complete slot vocabulary including the column keys for every table slot, and up to sixteen selected readable sources for the organisation, each with its id, title, kind, URL, locator, verification and up to 18,000 characters of text, between SOURCES BEGIN and SOURCES END.";
+
+/** Pure policy kept separate so crawl choices can be checked without a network call. */
+export const shouldCrawl = (
+  job: Pick<ResearchJob, "crawl" | "sourceIds">,
+) =>
+  job.crawl === true ||
+  (job.crawl === undefined && job.sourceIds === undefined);
 export function promptSettings(w: Workspace) {
   const p = settingsOf(w).prompt;
   return {
@@ -345,8 +352,9 @@ export async function processJob(store: Store, id: string) {
     await update((j) => {
       j.stage = "Reading the organisation's sources";
     });
-    const urls = job.sourceIds ? [] : org.website ? [org.website] : [];
-    if (!job.sourceIds && !org.website)
+    const crawl = shouldCrawl(job);
+    const urls = crawl && org.website ? [org.website] : [];
+    if (crawl && !org.website)
       await update((j) =>
         j.errors.push(
           "No official website supplied. Research uses the available source materials.",
@@ -470,7 +478,28 @@ export async function processJob(store: Store, id: string) {
             for (const f of result.data.findings) {
               try {
                 validateCitations(state.sources, org.id, f.kind, f.citations);
+                const originalSlot = f.slot as import("../shared/types.js").Slot;
+                const generatedSection = knowledgeSections.find((section) =>
+                  slots.some(
+                    (slot) =>
+                      slot.slot === originalSlot &&
+                      slot.section === section.section,
+                  ),
+                )?.section;
+                const outsideRequestedFolders =
+                  !!job.sections &&
+                  originalSlot !== "none" &&
+                  !!generatedSection &&
+                  !job.sections.includes(generatedSection);
+                const effectiveSlot = outsideRequestedFolders
+                  ? "none"
+                  : originalSlot;
+                if (outsideRequestedFolders)
+                  j.errors.push(
+                    `Fact placed outside the requested folders: ${originalSlot} → left unplaced`,
+                  );
                 let fields =
+                  !outsideRequestedFolders &&
                   f.fields &&
                   typeof f.fields === "object" &&
                   !Array.isArray(f.fields)
@@ -482,7 +511,7 @@ export async function processJob(store: Store, id: string) {
                     const structured = structuredFinding(
                       state.sources,
                       org.id,
-                      f.slot as import("../shared/types.js").Slot,
+                      effectiveSlot,
                       fields,
                       f.citations,
                       state,
@@ -496,11 +525,15 @@ export async function processJob(store: Store, id: string) {
                   (x) =>
                     x.orgId === org.id &&
                     x.roleId === role?.id &&
-                    x.kind === f.kind &&
+                     x.kind === f.kind &&
                     x.claim.toLowerCase() === claim.toLowerCase() &&
                     JSON.stringify(x.citations) === JSON.stringify(f.citations),
                 );
                 if (previous) {
+                  if (outsideRequestedFolders) {
+                    previous.slot = "none";
+                    previous.fields = undefined;
+                  }
                   previous.runIds = [...new Set([...previous.runIds, runId])];
                   findingIds.push(previous.id);
                 } else {
@@ -511,7 +544,7 @@ export async function processJob(store: Store, id: string) {
                     ...f,
                      claim,
                      ...(fields ? { fields } : { fields: undefined }),
-                    slot: f.slot as import("../shared/types.js").Slot,
+                     slot: effectiveSlot,
                     review: "unreviewed" as const,
                     runIds: [runId],
                     history: [],
@@ -582,6 +615,38 @@ export async function processJob(store: Store, id: string) {
         }
       }),
     );
+    if (succeeded && job.sections?.length)
+      await store.transact((state) => {
+        const current = get(state.jobs, id);
+        const organisation = get(state.organisations, job.orgId);
+        const scopedRole = job.roleId
+          ? get(state.roles, job.roleId)
+          : undefined;
+        const at = now();
+        for (const sectionId of job.sections!) {
+          const section = knowledgeSections.find(
+            (item) => item.section === sectionId,
+          );
+          if (!section) continue;
+          const subject = section.roleScoped ? scopedRole : organisation;
+          if (!subject) continue;
+          subject.sectionStatus ||= {};
+          const existing = subject.sectionStatus[sectionId];
+          if (existing?.stage === "reviewed") {
+            current.errors.push(
+              `Section ${section.title} was already reviewed; new facts need review`,
+            );
+            continue;
+          }
+          subject.sectionStatus[sectionId] = {
+            stage: "extracted",
+            by: `research run ${id}`,
+            at,
+          };
+          subject.updatedAt = at;
+          subject.version++;
+        }
+      });
     await update((j) => {
       j.status = succeeded
         ? j.errors.length

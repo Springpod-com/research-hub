@@ -51,6 +51,14 @@ import {
 } from "./components/occupation-matcher";
 import { ResearchDialog } from "./components/research-dialog";
 import { SectionsView } from "./components/sections-view";
+import { FolderView } from "./components/folder-view";
+import { NoteForm } from "./components/note-form";
+import {
+  extractionSourceIds,
+  noteRoleIds,
+  retryResearchBody,
+  validFolderSection,
+} from "./components/folder-workflow";
 import { FactPlacement } from "./components/fact-placement";
 import { QuestionFactDialog } from "./components/question-fact-dialog";
 import { RecordFactDialog } from "./components/record-fact-dialog";
@@ -448,7 +456,7 @@ export function App({
   const setFilter = (v: string) => setParam("status", v, "all");
   const requestedRole = query.get("role") || "all";
   const setRoleId = (v: string) => setParam("role", v, "all");
-  const evidenceMode = ["findings", "sources"].includes(query.get("view") || "")
+  const evidenceMode = ["findings", "folder"].includes(query.get("view") || "")
     ? query.get("view")!
     : "sections";
   const setEvidenceMode = (v: string) => setParam("view", v, "sections");
@@ -619,6 +627,30 @@ export function App({
       live = false;
     };
   }, [org?.id, roleId, data]);
+  useEffect(() => {
+    if (
+      evidenceMode !== "folder" ||
+      sectionsLoading ||
+      sectionsError ||
+      !sectionData
+    )
+      return;
+    if (
+      sectionFilter === "all" ||
+      !validFolderSection(sectionFilter, sectionData.sections)
+    ) {
+      const next = new URLSearchParams(query);
+      next.delete("view");
+      next.delete("section");
+      replaceQuery(next);
+    }
+  }, [
+    evidenceMode,
+    sectionFilter,
+    sectionsLoading,
+    sectionsError,
+    sectionData,
+  ]);
   // ...and the address is corrected to match, so a copied link or Back does
   // not carry a scope that is not the one shown.
   useEffect(() => {
@@ -1126,7 +1158,7 @@ export function App({
             {
               name: "folder",
               label: "Section",
-              value: "auto",
+              value: m?.folder || "auto",
               kind: "select",
               options: FOLDER_OPTIONS,
             },
@@ -1177,7 +1209,7 @@ export function App({
             {
               name: "folder",
               label: "Section",
-              value: "auto",
+              value: m?.folder || "auto",
               kind: "select",
               options: FOLDER_OPTIONS,
             },
@@ -1251,7 +1283,7 @@ export function App({
             {
               name: "folder",
               label: "Section",
-              value: "auto",
+              value: m?.folder || "auto",
               kind: "select",
               options: FOLDER_OPTIONS,
             },
@@ -1291,6 +1323,35 @@ export function App({
           }}
         />
       );
+    if (modal.type === "note")
+      {
+        const noteSection = sharedSections.find(
+          (section) => section.folder === m.folder,
+        )!;
+        return (
+        <NoteForm
+          folder={m.folder}
+          roleScoped={noteSection.roleScoped}
+          roleId={roleId === "all" ? undefined : roleId}
+          roleOptions={roleOptions.filter(([id]) => id !== "all")}
+          onClose={close}
+          onSubmit={async (value) => {
+            await save(
+              () => post(`/organisations/${org!.id}/sources`, {
+                ...value,
+                kind: "note",
+                url: "",
+                locator: value.extractedFrom,
+                suppliedBy: session?.name || "",
+                verification: "public-source",
+                roleIds: noteRoleIds(value.folder, value.roleId),
+              }),
+              "Research note saved",
+            );
+          }}
+        />
+      );
+      }
     if (modal.type === "finding")
       return (
         <RecordFactDialog
@@ -1553,9 +1614,11 @@ export function App({
           )}
           tiers={session?.providers || {}}
           initialRoleId={roleId === "all" ? undefined : roleId}
+          initialSection={modal.item?.section}
+          initialSourceIds={modal.item?.sourceIds}
           onClose={close}
-          onStart={async (tier, scopeRoleId, sections, sourceIds) => {
-            await startResearch(tier, scopeRoleId, sections, sourceIds);
+          onStart={async (tier, scopeRoleId, sections, sourceIds, crawl) => {
+            await startResearch(tier, scopeRoleId, sections, sourceIds, crawl);
           }}
         />
       );
@@ -1758,7 +1821,7 @@ export function App({
   const researchButton = (
     <U.Button disabled={busy} onClick={() => setModal({ type: "research" })}>
       <U.IconMagicWand size={20} />
-      Start research
+      Extract facts and evidence
     </U.Button>
   );
   const startResearch = async (
@@ -1766,12 +1829,14 @@ export function App({
     scopeRoleId?: string,
     sections?: Section[],
     sourceIds?: string[],
+    crawl?: boolean,
   ) => {
     const job: ResearchJob = await post(`/organisations/${org!.id}/research`, {
       tier,
       roleId: scopeRoleId,
       sections,
       sourceIds,
+      crawl,
     });
     await reload();
     U.toast({
@@ -1788,8 +1853,7 @@ export function App({
     run(
       () =>
         post(`/organisations/${org!.id}/research`, {
-          tier: j.tier,
-          roleId: j.roleId,
+          ...retryResearchBody(j),
         }),
       "Research started again",
     );
@@ -2125,12 +2189,6 @@ export function App({
         (runFilter === "all" || f.runIds.includes(runFilter)) &&
         f.claim.toLowerCase().includes(search.toLowerCase()),
     );
-    const shownSources = sources.filter(
-      (source) =>
-        sectionFilter === "all" ||
-        sharedSections.find((section) => section.folder === source.folder)
-          ?.section === sectionFilter,
-    );
     const reviewShown = async (review: "accepted" | "rejected") => {
       await post("/findings/bulk-review", {
         ids: shownFindings.map((finding) => finding.id),
@@ -2138,16 +2196,41 @@ export function App({
       });
     };
     const orgHasFindings = data?.findings.some((f) => f.orgId === org?.id);
-    const orgHasSources = data?.sources.some((x) => x.orgId === org?.id);
+    const openFolder =
+      evidenceMode === "folder" && sectionFilter !== "all"
+        ? sectionData?.sections.find((item) => item.section === sectionFilter)
+        : undefined;
+    const setFolderStatus = async (
+      section: Section,
+      stage: "gathering" | "complete" | "reviewed",
+    ) => {
+      const summary = sectionData?.sections.find((item) => item.section === section);
+      await run(
+        () =>
+          api(`/orgs/${org!.id}/sections/${section}/status`, {
+            method: "PUT",
+            body: JSON.stringify({
+              stage,
+              roleId:
+                summary?.roleScoped && roleId !== "all" ? roleId : undefined,
+            }),
+          }),
+        stage === "reviewed"
+          ? "Folder marked reviewed"
+          : stage === "complete"
+            ? "Folder marked complete"
+            : "Folder reopened",
+      );
+    };
     return (
       <div className="space-y-6">
         <div className="flex flex-col sm:flex-row justify-between gap-4">
           <div className="flex flex-wrap gap-2">
             <U.Button
-              variant={evidenceMode === "sections" ? "secondary" : "ghost"}
+              variant={evidenceMode === "sections" || evidenceMode === "folder" ? "secondary" : "ghost"}
               onClick={() => setEvidenceMode("sections")}
             >
-              Sections
+              Folders
             </U.Button>
             <U.Button
               variant={evidenceMode === "findings" ? "secondary" : "ghost"}
@@ -2155,26 +2238,48 @@ export function App({
             >
               Facts ({findings.length})
             </U.Button>
-            <U.Button
-              variant={evidenceMode === "sources" ? "secondary" : "ghost"}
-              onClick={() => setEvidenceMode("sources")}
-            >
-              Sources & assets ({sources.length})
-            </U.Button>
           </div>
           <U.Button
             variant="outline"
-            onClick={() =>
-              setModal({
-                type: evidenceMode === "sources" ? "upload" : "finding",
-              })
-            }
+            onClick={() => setModal({ type: evidenceMode === "findings" ? "finding" : "research" })}
           >
-            <U.IconAdd size={20} />
-            {evidenceMode === "sources" ? "Upload material" : "Record fact"}
+            {evidenceMode === "findings" ? <U.IconAdd size={20} /> : <U.IconMagicWand size={20} />}
+            {evidenceMode === "findings" ? "Record fact" : "Extract facts and evidence"}
           </U.Button>
         </div>
-        {evidenceMode === "sections" ? (
+        {evidenceMode === "folder" ? (
+          sectionsLoading ? (
+            <U.Skeleton className="h-64 rounded-xl" />
+          ) : sectionsError ? (
+            <U.Alert role="alert" variant="destructive">
+              <U.AlertTitle>Folder could not be loaded</U.AlertTitle>
+              <U.AlertDescription>{sectionsError}</U.AlertDescription>
+            </U.Alert>
+          ) : !openFolder ? (
+            <U.Alert role="alert">
+              <U.AlertTitle>Folder not found</U.AlertTitle>
+              <U.AlertDescription>
+                This folder is not available in the current role scope. Returning
+                to all folders.
+              </U.AlertDescription>
+            </U.Alert>
+          ) : (
+          <FolderView
+            summary={openFolder}
+            sources={sources.filter((item) => item.folder === openFolder.folder)}
+            findings={findings.filter((item) => sectionOfSlot(item.slot) === openFolder.section)}
+            onBack={() => {
+              const next = new URLSearchParams(query);
+              next.delete("section");
+              next.delete("view");
+              replaceQuery(next);
+            }}
+            onSource={setSource}
+            onFill={(slot) => setModal({ type: "finding", item: { slot } })}
+            onFact={setEvidence}
+          />
+          )
+        ) : evidenceMode === "sections" ? (
           sectionsError ? (
             <U.Alert role="alert" variant="destructive">
               <U.AlertTitle>Sections could not be loaded</U.AlertTitle>
@@ -2187,149 +2292,37 @@ export function App({
                 sectionFilter === "all" ? undefined : (sectionFilter as Section)
               }
               loading={sectionsLoading}
+              canReview={session?.role !== "researcher"}
+              busy={busy}
               onSelect={(section) => {
                 const next = new URLSearchParams(query);
                 next.set("section", section);
-                next.set("view", "findings");
+                next.set("view", "folder");
                 replaceQuery(next);
               }}
-              onFill={(slot) => setModal({ type: "finding", item: { slot } })}
+              onAdd={(section, kind) => {
+                const detail = sharedSections.find((item) => item.section === section)!;
+                setModal({ type: kind, item: { folder: detail.folder } });
+              }}
+              onStatus={(section, stage) => void setFolderStatus(section, stage)}
+              onExtract={(section) => {
+                const detail = sectionData?.sections.find(
+                  (item) => item.section === section,
+                );
+                if (!detail) return;
+                const readable = sources.filter(
+                  (source) => !!source.text && !source.error,
+                );
+                setModal({
+                  type: "research",
+                  item: {
+                    section,
+                    sourceIds: extractionSourceIds(readable, detail.folder),
+                  },
+                });
+              }}
             />
           )
-        ) : evidenceMode === "sources" ? (
-          <>
-            <div className="flex flex-wrap gap-3">
-              <U.Button
-                variant="outline"
-                size="sm"
-                onClick={() => setModal({ type: "web" })}
-              >
-                Capture website page
-              </U.Button>
-              <U.Button
-                variant="outline"
-                size="sm"
-                onClick={() => setModal({ type: "statement" })}
-              >
-                Record passage or organisation statement
-              </U.Button>
-            </div>
-            <DismissibleNote id="source-types" title="About source material">
-              Capture a public page, upload a document or photo, or record what
-              the organisation has told you. Each source stays linked to its
-              facts.
-            </DismissibleNote>
-            <div className="sm:w-72">
-              <Pick
-                label="Section"
-                value={sectionFilter}
-                onChange={setSectionFilter}
-                options={[
-                  ["all", "All sections"],
-                  ...sharedSections.map(
-                    (section) =>
-                      [section.section, section.title] as [string, string],
-                  ),
-                ]}
-              />
-            </div>
-            <U.DataTable
-              data={shownSources}
-              getRowId={(s) => s.id}
-              defaultPageSize={8}
-              showColumnVisibility={false}
-              columns={[
-                {
-                  id: "title",
-                  header: "Source material",
-                  accessor: (s) => s.title,
-                  sortable: true,
-                  cell: (s) => (
-                    <U.Button
-                      variant="link"
-                      className="h-auto p-0 text-left whitespace-normal"
-                      onClick={() => setSource(s)}
-                    >
-                      {s.title}
-                    </U.Button>
-                  ),
-                },
-                {
-                  id: "kind",
-                  header: "Type",
-                  accessor: (s) =>
-                    ({
-                      web: "Website",
-                      document: "Document",
-                      statement: "Statement",
-                      image: "Workplace image",
-                      occupation: "Occupational reference",
-                      film: "Film",
-                      advert: "Job advert",
-                      screenshot: "Screenshot",
-                      standard: "Apprenticeship standard",
-                      guidance: "Professional guidance",
-                    })[s.kind],
-                },
-                {
-                  id: "section",
-                  header: "Section",
-                  accessor: (s) => folderTitle(s.folder),
-                },
-                {
-                  id: "exportName",
-                  header: "Export file name",
-                  accessor: (s) => s.exportName || "Not available",
-                },
-                {
-                  id: "date",
-                  header: "Captured",
-                  cell: (s) => (
-                    <span className="text-p5">{date(s.retrievedAt)}</span>
-                  ),
-                },
-                {
-                  id: "permission",
-                  header: "Usage",
-                  cell: (s) => <Status value={s.permission} />,
-                },
-                {
-                  id: "view",
-                  header: "",
-                  cell: (s) => (
-                    <U.Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setSource(s)}
-                    >
-                      Inspect
-                    </U.Button>
-                  ),
-                },
-              ]}
-              empty={
-                roleId !== "all" && orgHasSources ? (
-                  <Empty
-                    title="No sources for this role"
-                    description="Sources linked to other roles are hidden by the role scope."
-                    action={
-                      <U.Button
-                        variant="outline"
-                        onClick={() => setRoleId("all")}
-                      >
-                        Show all roles
-                      </U.Button>
-                    }
-                  />
-                ) : (
-                  <Empty
-                    title="Bring your sources together"
-                    description="Capture or upload source material to begin."
-                  />
-                )
-              }
-            />
-          </>
         ) : (
           <>
             <div className="flex flex-col sm:flex-row gap-3">
@@ -2529,9 +2522,9 @@ export function App({
                     action={
                       <U.Button
                         variant="outline"
-                        onClick={() => setEvidenceMode("sources")}
+                        onClick={() => setEvidenceMode("sections")}
                       >
-                        Add source material
+                        Open folders
                       </U.Button>
                     }
                   />
@@ -4032,6 +4025,12 @@ function SourcePanel({
                 {s.exportName || "Not available"}
               </p>
             </div>
+            {s.kind === "note" && (
+              <div className="sm:col-span-2">
+                <p className="text-label-3">Extracted from</p>
+                <p className="text-p4 break-words">{s.extractedFrom}</p>
+              </div>
+            )}
             {s.providedBy && (
               <div className="sm:col-span-2">
                 <p className="text-label-3">Provided by</p>
