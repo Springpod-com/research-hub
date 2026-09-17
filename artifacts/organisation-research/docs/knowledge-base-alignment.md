@@ -1,6 +1,9 @@
 # Aligning the research pack with the Client Knowledge Base (V1)
 
-Status: proposal for comment, 17 September 2026. Nothing below is built yet.
+Status: built, 17 September 2026 (all four steps of §10). The API added for
+it is described in `knowledge-base-api.md`; the export template copy lives in
+`templates/`. Existing 1.0.0 packs are untouched and still download in every
+format.
 
 Reference: `Client_Knowledge_Base_Template` (six numbered folders, each with an
 "About this folder" note, and `Springpod_LEARN_Client_Knowledge_Base_V1.docx`).

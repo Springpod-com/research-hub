@@ -1,0 +1,5 @@
+Brand
+
+The logo, the colours, the type, the photography, the house style. From the organisation's guidelines if supplied (then they live in 06 and this folder points at them), otherwise from a public brand centre or press kit, the site's own CSS (the real hex values and font names), and screenshots of the site for reference. Note the licence of every typeface.
+
+Name every file with its date and where it came from, for example 2026-09-17_careers-page_apprenticeships.pdf, and log it in Springpod_LEARN_Organisation_Knowledge_Base_V1.docx.

@@ -1,0 +1,196 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Organisation research pack 2.0.0",
+  "type": "object",
+  "properties": {
+    "schemaVersion": { "type": "string", "const": "2.0.0" },
+    "id": { "type": "string", "format": "uuid" },
+    "revision": { "type": "integer", "exclusiveMinimum": 0 },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "createdBy": { "type": "string", "minLength": 1 },
+    "reviewer": { "type": "string" },
+    "status": { "type": "string", "enum": ["draft", "ready"] },
+    "employerApproval": { "type": "boolean", "const": false },
+    "organisation": {
+      "type": "object",
+      "required": ["id", "name"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "name": { "type": "string", "minLength": 1 },
+        "factChecker": { "$ref": "#/$defs/person" },
+        "brand": {
+          "type": "object",
+          "properties": {
+            "guidelines": { "type": "string" },
+            "logo": { "type": "string" },
+            "photography": { "type": "string" },
+            "houseStyle": { "type": "string" }
+          },
+          "required": ["guidelines", "logo", "photography", "houseStyle"],
+          "additionalProperties": false
+        },
+        "mayUse": { "type": "array", "items": { "$ref": "#/$defs/attributed" } },
+        "mustNotSay": { "type": "array", "items": { "$ref": "#/$defs/attributed" } }
+      },
+      "additionalProperties": true
+    },
+    "role": {
+      "type": "object",
+      "required": ["id", "orgId", "title"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "orgId": { "type": "string", "format": "uuid" },
+        "title": { "type": "string", "minLength": 1 },
+        "standard": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "level": { "type": "string" },
+            "duration": { "type": "string" },
+            "url": { "type": "string" },
+            "assessmentPlanUrl": { "type": "string" }
+          },
+          "required": ["name", "level", "duration", "url", "assessmentPlanUrl"],
+          "additionalProperties": false
+        },
+        "ncsUrl": { "type": "string" },
+        "professionalBody": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "registrationRoute": { "type": "string" },
+            "frameworkUrl": { "type": "string" }
+          },
+          "required": ["name", "registrationRoute", "frameworkUrl"],
+          "additionalProperties": false
+        },
+        "interview": {
+          "type": "object",
+          "properties": {
+            "who": { "type": "string" },
+            "jobTitle": { "type": "string" },
+            "timeInRole": { "type": "string" },
+            "mayBeNamed": { "type": "boolean" },
+            "date": { "type": "string" },
+            "how": { "type": "string" },
+            "recordingSourceId": { "type": "string", "format": "uuid" },
+            "transcriptSourceId": { "type": "string", "format": "uuid" }
+          },
+          "required": ["who", "jobTitle", "timeInRole", "mayBeNamed", "date", "how"],
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": true
+    },
+    "findings": { "type": "array", "items": { "type": "object" } },
+    "sources": { "type": "array", "items": { "type": "object" } },
+    "activities": { "type": "array", "items": { "type": "object" } },
+    "questions": { "type": "array", "items": { "type": "object" } },
+    "limitations": { "type": "array", "items": { "type": "string" } },
+    "header": {
+      "type": "object",
+      "properties": {
+        "organisation": { "type": "string" },
+        "entity": { "type": "string" },
+        "role": { "type": "string" },
+        "compiledBy": { "type": "string" },
+        "started": { "type": "string" },
+        "lastUpdated": { "type": "string" },
+        "factChecker": { "type": "string" }
+      },
+      "required": ["organisation", "entity", "role", "compiledBy", "started", "lastUpdated", "factChecker"],
+      "additionalProperties": false
+    },
+    "tiers": {
+      "type": "object",
+      "properties": {
+        "1": { "type": "string" },
+        "2": { "type": "string" },
+        "3": { "type": "string" },
+        "4": { "type": "string" }
+      },
+      "required": ["1", "2", "3", "4"],
+      "additionalProperties": false
+    },
+    "sections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "section": { "type": "string", "enum": ["organisation", "role", "case", "media", "brand", "supplied"] },
+          "folder": { "type": "string", "enum": ["01-organisation", "02-role", "03-case-material", "04-media", "05-brand", "06-organisation-supplied"] },
+          "title": { "type": "string" },
+          "slots": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "slot": { "$ref": "#/$defs/slot" },
+                "label": { "type": "string" },
+                "findingIds": { "type": "array", "items": { "type": "string", "format": "uuid" } }
+              },
+              "required": ["slot", "label", "findingIds"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["section", "folder", "title", "slots"],
+        "additionalProperties": false
+      }
+    },
+    "register": { "type": "array", "items": { "$ref": "#/$defs/registerRow" } },
+    "toConfirm": { "type": "array", "items": { "$ref": "#/$defs/registerRow" } }
+  },
+  "$defs": {
+    "person": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "jobTitle": { "type": "string" }
+      },
+      "required": ["name", "jobTitle"],
+      "additionalProperties": false
+    },
+    "attributed": {
+      "type": "object",
+      "properties": {
+        "text": { "type": "string" },
+        "sourceId": { "type": "string", "format": "uuid" }
+      },
+      "required": ["text", "sourceId"],
+      "additionalProperties": false
+    },
+    "slot": {
+      "type": "string",
+      "enum": [
+        "none", "organisation.paragraph", "organisation.entity", "organisation.sites", "organisation.products", "organisation.size", "organisation.voice", "organisation.news",
+        "role.title", "role.standard", "role.duty", "role.ncs", "role.body", "role.advert", "role.day", "role.vocabulary",
+        "case.routine", "case.measurement", "case.equipment", "case.fault", "case.safety", "case.people", "media.item",
+        "brand.guidelines", "brand.logo", "brand.colour", "brand.type", "brand.photography", "brand.house-style", "brand.screenshot",
+        "supplied.document", "supplied.interview", "supplied.may-use", "supplied.must-not-say"
+      ]
+    },
+    "registerRow": {
+      "type": "object",
+      "properties": {
+        "n": { "type": "integer", "exclusiveMinimum": 0 },
+        "findingId": { "type": "string", "format": "uuid" },
+        "slot": { "$ref": "#/$defs/slot" },
+        "tier": { "type": "integer", "enum": [1, 2, 3, 4] },
+        "claim": { "type": "string" },
+        "sourceIds": { "type": "array", "items": { "type": "string", "format": "uuid" } },
+        "date": { "type": "string" },
+        "parts": { "type": "array", "items": { "type": "string", "enum": ["day", "workflow", "matters", "call"] }, "uniqueItems": true },
+        "verified": { "type": "boolean" }
+      },
+      "required": ["n", "findingId", "slot", "tier", "claim", "sourceIds", "date", "parts", "verified"],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schemaVersion", "id", "revision", "createdAt", "createdBy", "reviewer", "status",
+    "employerApproval", "organisation", "role", "findings", "sources", "activities",
+    "questions", "limitations", "header", "tiers", "sections", "register", "toConfirm"
+  ],
+  "additionalProperties": false
+}

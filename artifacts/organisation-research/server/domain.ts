@@ -11,6 +11,17 @@ import type {
   Organisation,
   Role,
   ReviewState,
+  Tier,
+  Folder,
+  PackV2,
+  SectionsResponse,
+  Slot,
+} from "../shared/types.js";
+import {
+  sections,
+  slots,
+  slotFields,
+  tierNames,
 } from "../shared/types.js";
 export class HttpError extends Error {
   constructor(
@@ -55,12 +66,57 @@ export const orgInput = z.object({
   summary: optionalText,
   brandNotes: optionalText,
 });
+const personInput = z.object({ name: text.max(200), jobTitle: optionalText }).strict();
+const brandInput = z.object({
+  guidelines: z.string().trim().max(8000),
+  logo: z.string().trim().max(8000),
+  photography: z.string().trim().max(8000),
+  houseStyle: z.string().trim().max(8000),
+}).strict();
+const attributedInput = z.object({
+  text: text,
+  sourceId: z.string().uuid(),
+}).strict();
+export const orgPatchInput = orgInput.extend({
+  factChecker: personInput.nullable().optional(),
+  brand: brandInput.nullable().optional(),
+  mayUse: z.array(attributedInput).max(100).nullable().optional(),
+  mustNotSay: z.array(attributedInput).max(100).nullable().optional(),
+});
 export const roleInput = z.object({
   title: text.max(150),
   location: optionalText,
   seniority: optionalText,
   responsibilities: optionalText,
   boundaries: optionalText,
+});
+const standardInput = z.object({
+  name: text.max(300),
+  level: text.max(100),
+  duration: text.max(200),
+  url: url,
+  assessmentPlanUrl: url,
+}).strict();
+const professionalBodyInput = z.object({
+  name: text.max(300),
+  registrationRoute: z.string().trim().max(8000),
+  frameworkUrl: url,
+}).strict();
+const interviewInput = z.object({
+  who: text.max(300),
+  jobTitle: text.max(300),
+  timeInRole: z.string().trim().max(500),
+  mayBeNamed: z.boolean(),
+  date: z.string().trim().max(100),
+  how: z.string().trim().max(1000),
+  recordingSourceId: z.string().uuid().optional(),
+  transcriptSourceId: z.string().uuid().optional(),
+}).strict();
+export const rolePatchInput = roleInput.extend({
+  standard: standardInput.nullable().optional(),
+  ncsUrl: url.nullable().optional(),
+  professionalBody: professionalBodyInput.nullable().optional(),
+  interview: interviewInput.nullable().optional(),
 });
 export const citation = z.object({
   sourceId: z.string().uuid(),
@@ -72,11 +128,14 @@ export const citation = z.object({
   locator: z.string().max(300).default("Source excerpt"),
 });
 export const findingInput = z.object({
-  claim: text,
+  claim: text.optional(),
   kind: z.enum(["company", "occupation", "proposal"]),
   roleId: z.string().uuid().optional(),
   citations: z.array(citation).max(12),
   rationale: optionalText,
+  slot: z.enum(["none", ...slots.map((slot) => slot.slot)] as [string, ...string[]]).optional(),
+  parts: z.array(z.enum(["day", "workflow", "matters", "call"])).max(4).optional(),
+  fields: z.record(z.string(), z.unknown()).optional(),
 });
 export const questionInput = z.object({
   text: text,
@@ -232,7 +291,7 @@ export function validateCitations(
   if (kind !== "proposal" && !citations.length)
     throw new HttpError(
       422,
-      "Facts about the organisation and occupational context need a supporting source passage. Choose a source and paste the exact passage, or classify the finding as a design proposal.",
+      "Facts about the organisation and occupational context need a supporting source passage. Choose a source and paste the exact passage, or classify the fact as a design proposal.",
     );
   for (const c of citations) {
     const s = get(sources, c.sourceId);
@@ -255,6 +314,133 @@ export function validateCitations(
       );
   }
 }
+
+const rights = new Set(["organisation-supplied", "press-kit", "reference-only"]);
+const shown = (value: unknown) =>
+  Array.isArray(value) ? value.join(", ") : typeof value === "string" ? value : "";
+const sentence = (...parts: (string | undefined)[]) =>
+  parts.filter((part) => part?.trim()).join("; ");
+
+/** Validate a table row and return the claim which represents that row everywhere. */
+export function structuredFinding(
+  sources: Source[],
+  orgId: string,
+  slot: Slot | undefined,
+  fields: Record<string, unknown> | undefined,
+  citations: Citation[],
+  records?: Pick<Workspace, "findings" | "questions">,
+): { fields?: Record<string, unknown>; claim?: string } {
+  if (!fields) return {};
+  const columns = slot ? slotFields[slot] : undefined;
+  if (!columns)
+    throw new HttpError(422, "Structured fields are only valid for a table slot.");
+  const allowed = new Set(columns.map((column) => column.key));
+  const unknown = Object.keys(fields).filter((key) => !allowed.has(key));
+  if (unknown.length)
+    throw new HttpError(422, `Unknown structured field${unknown.length === 1 ? "" : "s"}: ${unknown.join(", ")}.`);
+  for (const column of columns) {
+    const value = fields[column.key];
+    if (column.required && (typeof value !== "string" || !value.trim()))
+      throw new HttpError(422, `${column.label} is required.`);
+    if (value !== undefined && column.list && (!Array.isArray(value) || value.some((item) => typeof item !== "string")))
+      throw new HttpError(422, `${column.label} must be a list of text values.`);
+    if (value !== undefined && !column.list && typeof value !== "string")
+      throw new HttpError(422, `${column.label} must be text.`);
+  }
+  if (slot === "media.item" && fields.rights !== undefined && !rights.has(String(fields.rights)))
+    throw new HttpError(422, "Rights must be organisation-supplied, press-kit or reference-only.");
+  const sourceReference =
+    slot === "role.advert"
+      ? fields.fileSourceId
+      : slot === "media.item"
+        ? fields.transcriptSourceId
+        : undefined;
+  if (sourceReference) {
+    const source = sources.find((item) => item.id === sourceReference);
+    if (!source || source.orgId !== orgId)
+      throw new HttpError(422, "A structured source reference must belong to this organisation.");
+  }
+  const recordReferences =
+    slot === "supplied.document"
+      ? fields.settles
+      : slot === "supplied.interview"
+        ? fields.usedIn
+        : undefined;
+  if (Array.isArray(recordReferences)) {
+    if (recordReferences.length && !records)
+      throw new HttpError(
+        422,
+        "Structured fact and question references must belong to this organisation.",
+      );
+    const validIds = new Set(
+      records
+        ? [
+            ...records.findings
+              .filter((item) => item.orgId === orgId)
+              .map((item) => item.id),
+            ...records.questions
+              .filter((item) => item.orgId === orgId)
+              .map((item) => item.id),
+          ]
+        : [],
+    );
+    for (const id of recordReferences)
+      if (!validIds.has(id))
+        throw new HttpError(
+          422,
+          "Structured fact and question references must belong to this organisation.",
+        );
+  }
+  if (slot === "case.measurement") {
+    const origin = String(fields.origin);
+    if (origin === "invented and declared") {
+      if (citations.length)
+        throw new HttpError(422, "An invented and declared measurement must not have citations.");
+    } else {
+      const source = sources.find((item) => item.id === origin);
+      if (!source || source.orgId !== orgId)
+        throw new HttpError(422, "Measurement origin must be a source in this organisation or “invented and declared”.");
+    }
+  }
+  const f = (key: string) => shown(fields[key]);
+  const claims: Partial<Record<Slot, string>> = {
+    "role.duty": f("plainWords") ? `${f("duty")} — ${f("plainWords")}` : f("duty"),
+    "role.advert": sentence(f("title"), f("postedWhere") && `posted at ${f("postedWhere")}`, f("siteAndTeam"), f("shiftPattern") && `shift pattern ${f("shiftPattern")}`, f("systemsNamed") && `systems ${f("systemsNamed")}`, f("fileSourceId") && `saved advert ${f("fileSourceId")}`, f("date")),
+    "role.vocabulary": `${f("term")} — ${f("meaning")}`,
+    "case.measurement": `${f("reading")}${f("unit") ? ` ${f("unit")}` : ""}; review line ${f("reviewLine") || "—"}; limit ${f("limit") || "—"} (${f("origin")})`,
+    "case.fault": sentence(f("problem"), f("likelyCauses") && `likely causes ${f("likelyCauses")}`, f("howChecked") && `checked by ${f("howChecked")}`),
+    "brand.colour": sentence(f("name"), f("hex"), f("whereSeen") && `seen ${f("whereSeen")}`),
+    "brand.type": sentence(f("face"), f("whereUsed") && `used ${f("whereUsed")}`, f("licence") && `licence ${f("licence")}`),
+    "media.item": sentence(f("whatItShows"), f("rights") && `rights ${f("rights")}`, f("transcriptSourceId") && `transcript ${f("transcriptSourceId")}`, f("timecode") && `timecode ${f("timecode")}`),
+    "supplied.document": sentence(f("whatItIs"), f("fromWhom") && `from ${f("fromWhom")}`, f("settles") && `settles ${f("settles")}`),
+    "supplied.interview": sentence(f("question"), f("answerInTheirWords"), f("timecode") && `timecode ${f("timecode")}`, f("usedIn") && `used in ${f("usedIn")}`),
+  };
+  return { fields, claim: claims[slot!] };
+}
+
+export function validateOrganisationReferences(
+  sources: Source[],
+  orgId: string,
+  entries: { sourceId: string }[] | null | undefined,
+) {
+  for (const entry of entries || []) {
+    const source = sources.find((item) => item.id === entry.sourceId);
+    if (!source || source.orgId !== orgId || sourceView(source).tier !== 1)
+      throw new HttpError(422, "Names we may use and things we must not say must cite a tier-1 source in this organisation.");
+  }
+}
+
+export function validateRoleReferences(
+  sources: Source[],
+  orgId: string,
+  interview: { recordingSourceId?: string; transcriptSourceId?: string } | null | undefined,
+) {
+  for (const id of [interview?.recordingSourceId, interview?.transcriptSourceId].filter(Boolean) as string[]) {
+    const source = sources.find((item) => item.id === id);
+    if (!source || source.orgId !== orgId)
+      throw new HttpError(422, "Interview recordings and transcripts must belong to this organisation.");
+  }
+}
 /**
  * A finding whose cited web page was refreshed and whose exact quotation no
  * longer appears in the new capture must be looked at again. Reviewing the
@@ -268,22 +454,35 @@ export function needsRecheck(f: Finding): boolean {
 export function readiness(w: Workspace, orgId: string, roleId: string) {
   roleInOrg(w, orgId, roleId);
   const role = get(w.roles, roleId);
+  const organisation = get(w.organisations, orgId);
   const relevant = w.findings.filter(
     (f) => f.orgId === orgId && (!f.roleId || f.roleId === roleId),
+  );
+  const packSources = w.sources.filter(
+    (s) =>
+      s.orgId === orgId &&
+      sourceView(s).folder === "04-media" &&
+      (!s.roleIds.length ||
+        s.roleIds.includes(roleId) ||
+        relevant.some(
+          (fact) =>
+            fact.review === "accepted" &&
+            fact.citations.some((citation) => citation.sourceId === s.id),
+        )),
   );
   const issues: string[] = [];
   if (!role.responsibilities.trim())
     issues.push("Describe the role responsibilities.");
   if (!relevant.some((f) => f.kind === "company" && f.review === "accepted"))
     issues.push(
-      "Accept at least one evidence-backed finding about the organisation.",
+      "Accept at least one evidence-backed fact about the organisation.",
     );
   if (
     relevant.some(
       (f) => f.review === "unreviewed" || f.review === "clarification",
     )
   )
-    issues.push("Review outstanding findings or explicitly exclude them.");
+    issues.push("Review outstanding facts or explicitly exclude them.");
   if (
     w.questions.some(
       (q) =>
@@ -316,7 +515,7 @@ export function readiness(w: Workspace, orgId: string, roleId: string) {
       )
     ) {
       issues.push(
-        "Accepted activities must reference findings accepted in this pack.",
+        "Accepted activities must reference facts accepted in this pack.",
       );
     }
   }
@@ -324,12 +523,75 @@ export function readiness(w: Workspace, orgId: string, roleId: string) {
     try {
       validateCitations(w.sources, orgId, f.kind, f.citations);
     } catch {
-      issues.push("Repair the evidence references for an accepted finding.");
+      issues.push("Repair the evidence references for an accepted fact.");
     }
   if (relevant.some((f) => f.review !== "rejected" && needsRecheck(f)))
     issues.push(
-      "Re-review findings whose source page changed since the quotation was captured.",
+      "Re-review facts whose source page changed since the quotation was captured.",
     );
+  const mediaFacts = relevant.filter(
+    (f) => f.review === "accepted" && f.slot === "media.item",
+  );
+  try {
+    validateOrganisationReferences(
+      w.sources,
+      orgId,
+      [...(organisation.mayUse || []), ...(organisation.mustNotSay || [])],
+    );
+  } catch {
+    issues.push(
+      "A name we may use or a thing we must not say cites a source that is no longer tier 1.",
+    );
+  }
+  if (
+    packSources.some(
+      (source) => !source.rights,
+    ) ||
+    mediaFacts.some(
+      (fact) =>
+        typeof fact.fields?.rights !== "string" ||
+        !fact.fields.rights.trim(),
+    )
+  )
+    issues.push("Add a rights note to every media item.");
+  if (
+    packSources.some(
+      (source) =>
+        source.kind === "film" &&
+        !source.transcriptSourceId?.trim() &&
+        !/\bno transcript\b/i.test(source.caption || "") &&
+        !mediaFacts.some(
+          (fact) =>
+            fact.citations.some((citation) => citation.sourceId === source.id) &&
+            /\bno transcript\b/i.test(fact.rationale),
+        ),
+    )
+  )
+    issues.push("Add a transcript for every film, or state why there is no transcript.");
+  if (
+    relevant.some(
+      (fact) =>
+        fact.review === "accepted" &&
+        findingView(w, fact).tier === 4 &&
+        !/\b(invented|illustrative)\b/i.test(fact.rationale),
+    )
+  )
+    issues.push("State that every tier-4 fact is invented or illustrative in its rationale.");
+  if (
+    relevant.some(
+      (fact) =>
+        fact.review === "accepted" &&
+        fact.slot === "case.measurement" &&
+        (typeof fact.fields?.origin !== "string" ||
+          !fact.fields.origin.trim()),
+    )
+  )
+    issues.push("Add an origin to every case measurement.");
+  if (
+    !organisation.factChecker ||
+    !organisation.factChecker.name.trim()
+  )
+    issues.push("Name the organisation's fact checker or record them as not yet known.");
   return [...new Set(issues)];
 }
 /**
@@ -349,6 +611,10 @@ export function roleFingerprint(w: Workspace, role: Role): string {
     "summary",
     "brandNotes",
     "logoSourceId",
+    "factChecker",
+    "brand",
+    "mayUse",
+    "mustNotSay",
   ];
   const findings = w.findings.filter(
     (f) => f.orgId === role.orgId && (!f.roleId || f.roleId === role.id),
@@ -364,10 +630,25 @@ export function roleFingerprint(w: Workspace, role: Role): string {
       "responsibilities",
       "boundaries",
       "occupations",
+      "standard",
+      "ncsUrl",
+      "professionalBody",
+      "interview",
     ]),
     organisation: org ? pick(org, orgKeys) : null,
     findings: findings.map((f) => ({
-      ...pick(f, ["id", "kind", "claim", "citations", "review", "rationale"]),
+      ...pick(f, [
+        "id",
+        "kind",
+        "claim",
+        "citations",
+        "review",
+        "rationale",
+        "slot",
+        "parts",
+        "fields",
+        "verified",
+      ]),
       recheck: needsRecheck(f),
     })),
     // The source register a pack would snapshot, keyed by content rather than
@@ -399,6 +680,13 @@ export function roleFingerprint(w: Workspace, role: Role): string {
                 "mime",
                 "filename",
                 "error",
+                "folder",
+                "tier",
+                "tierReason",
+                "rights",
+                "transcriptSourceId",
+                "timecode",
+                "providedBy",
               ]),
             ),
           ),
@@ -457,6 +745,109 @@ export function reviewStateOf(
 export function roleView(w: Workspace, role: Role): Role {
   const { state, changed } = reviewStateOf(w, role);
   return { ...role, reviewState: state, reviewChanged: changed };
+}
+export function sourceView(source: Source): Source {
+  const folder: Folder =
+    source.folder ||
+    (source.providedBy || source.verification === "client-confirmed"
+      ? "06-organisation-supplied"
+      : ["image", "film"].includes(source.kind)
+        ? "04-media"
+        : source.kind === "screenshot"
+          ? "05-brand"
+          : ["advert", "standard", "guidance", "occupation"].includes(source.kind)
+            ? "02-role"
+            : "01-organisation");
+  const tier: Tier =
+    source.tier ||
+    (source.providedBy || source.verification === "client-confirmed"
+      ? 1
+      : ["occupation", "standard", "guidance"].includes(source.kind)
+        ? 3
+        : 2);
+  let whereFrom = tier === 1 ? "organisation" : "team";
+  if (source.kind === "web" && source.url) {
+    try {
+      whereFrom = new URL(source.url).hostname.replace(/^www\./, "") || whereFrom;
+    } catch {
+      // Stored legacy URLs may not parse; the tier-based name remains usable.
+    }
+  }
+  const topic =
+    source.title
+      .toLowerCase()
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 60)
+      .replace(/-+$/g, "") || "source";
+  const ext = source.filename?.match(/\.([a-zA-Z0-9]{1,10})$/)?.[1]?.toLowerCase() || "txt";
+  const date = /^\d{4}-\d{2}-\d{2}/.exec(source.retrievedAt)?.[0] || "unknown-date";
+  return {
+    ...source,
+    folder,
+    tier,
+    exportName: `${date}_${whereFrom.toLowerCase().replace(/[^a-z0-9.-]+/g, "-")}_${topic}.${ext}`,
+  };
+}
+export function findingView(w: Workspace, finding: Finding): Finding {
+  const tier: Tier = finding.verified
+    ? 1
+    : !finding.citations.length
+      ? 4
+      : finding.citations.reduce<Tier>((lowest, citation) => {
+          const source = w.sources.find((s) => s.id === citation.sourceId);
+          return Math.min(lowest, source ? sourceView(source).tier! : 4) as Tier;
+        }, 4);
+  return { ...finding, tier, slot: finding.slot || "none", parts: finding.parts || [] };
+}
+export function sectionsView(
+  w: Workspace,
+  orgId: string,
+  roleId?: string,
+): SectionsResponse {
+  roleInOrg(w, orgId, roleId);
+  const relevantFindings = w.findings.filter(
+    (f) =>
+      f.orgId === orgId &&
+      f.review !== "rejected" &&
+      (!roleId || !f.roleId || f.roleId === roleId),
+  );
+  const result = sections.map((section) => {
+    const sectionSlots = slots
+      .filter((slot) => slot.section === section.section)
+      .map((slot) => {
+        const findingIds = relevantFindings
+          .filter((f) => (f.slot || "none") === slot.slot)
+          .map((f) => f.id);
+        return { ...slot, findingIds, filled: findingIds.length > 0 };
+      });
+    const sourceIds = w.sources
+      .filter(
+        (source) =>
+          source.orgId === orgId &&
+          sourceView(source).folder === section.folder &&
+          (!roleId || !source.roleIds.length || source.roleIds.includes(roleId)),
+      )
+      .map((source) => source.id);
+    return {
+      ...section,
+      slots: sectionSlots,
+      filled: sectionSlots.filter((slot) => slot.filled).length,
+      total: sectionSlots.length,
+      sourceIds,
+      gaps: sectionSlots.filter((slot) => !slot.filled).map((slot) => slot.label),
+    };
+  });
+  return {
+    sections: result,
+    missing: result.flatMap((section) =>
+      section.slots
+        .filter((slot) => !slot.filled)
+        .map((slot) => `${section.title}: ${slot.label}`),
+    ),
+  };
 }
 export function setReviewState(
   w: Workspace,
@@ -607,8 +998,7 @@ export function captureLineage(w: Workspace, source: Source): string[] {
   }
   return ids;
 }
-export const packSchema = z.object({
-  schemaVersion: z.literal("1.0.0"),
+const packBaseSchema = z.object({
   id: z.string().uuid(),
   revision: z.number().int().positive(),
   createdAt: z.string().datetime(),
@@ -653,6 +1043,48 @@ export const packSchema = z.object({
   ),
   limitations: z.array(z.string()),
 });
+const packV1Schema = packBaseSchema.extend({ schemaVersion: z.literal("1.0.0") });
+const tierSchema = z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]);
+const slotSchema = z.enum(["none", ...slots.map((s) => s.slot)] as [string, ...string[]]);
+const partSchema = z.enum(["day", "workflow", "matters", "call"]);
+const uniquePartsSchema = z
+  .array(partSchema)
+  .refine((parts) => new Set(parts).size === parts.length, {
+    message: "Each chapter part may only be included once.",
+  });
+const registerRowSchema = z.object({
+  n: z.number().int().positive(),
+  findingId: z.string().uuid(),
+  slot: slotSchema,
+  tier: tierSchema,
+  claim: z.string(),
+  sourceIds: z.array(z.string().uuid()),
+  date: z.string(),
+  parts: uniquePartsSchema,
+  verified: z.boolean(),
+});
+const packV2Schema = packBaseSchema.extend({
+  schemaVersion: z.literal("2.0.0"),
+  header: z.object({
+    organisation: z.string(),
+    entity: z.string(),
+    role: z.string(),
+    compiledBy: z.string(),
+    started: z.string(),
+    lastUpdated: z.string(),
+    factChecker: z.string(),
+  }),
+  tiers: z.object({ 1: z.string(), 2: z.string(), 3: z.string(), 4: z.string() }),
+  sections: z.array(z.object({
+    section: z.enum(["organisation", "role", "case", "media", "brand", "supplied"]),
+    folder: z.enum(["01-organisation", "02-role", "03-case-material", "04-media", "05-brand", "06-organisation-supplied"]),
+    title: z.string(),
+    slots: z.array(z.object({ slot: slotSchema, label: z.string(), findingIds: z.array(z.string().uuid()) })),
+  })),
+  register: z.array(registerRowSchema),
+  toConfirm: z.array(registerRowSchema),
+});
+export const packSchema = z.union([packV1Schema, packV2Schema]);
 export function makePack(
   w: Workspace,
   orgId: string,
@@ -679,7 +1111,10 @@ export function makePack(
       (!f.roleId || f.roleId === roleId) &&
       f.review !== "rejected" &&
       (status === "draft" || f.review === "accepted"),
-  );
+  ).map((f) => {
+    const view = findingView(w, f);
+    return { ...view, parts: [...new Set(view.parts || [])] };
+  });
   const sourceIds = new Set(
     findings.flatMap((f) => f.citations.map((c) => c.sourceId)),
   );
@@ -691,9 +1126,40 @@ export function makePack(
           !s.roleIds.length ||
           s.roleIds.includes(roleId)),
     )
-    .map(({ blob, ...rest }) => rest);
-  const pack: Pack = {
-    schemaVersion: "1.0.0",
+    .map(({ blob, ...rest }) => sourceView(rest));
+  const sectionRows = sections.map((section) => ({
+    section: section.section,
+    folder: section.folder,
+    title: section.title,
+    slots: slots.filter((slot) => slot.section === section.section).map((slot) => ({
+      slot: slot.slot,
+      label: slot.label,
+      findingIds: findings.filter((finding) => finding.slot === slot.slot).map((finding) => finding.id),
+    })),
+  }));
+  const orderedIds = sectionRows.flatMap((section) => section.slots.flatMap((slot) => slot.findingIds));
+  orderedIds.push(...findings.filter((finding) => !orderedIds.includes(finding.id)).map((finding) => finding.id));
+  const register = orderedIds.map((id, index) => {
+    const finding = findings.find((item) => item.id === id)!;
+    const dates = finding.citations
+      .map((citation) => sources.find((source) => source.id === citation.sourceId)?.retrievedAt)
+      .filter(Boolean) as string[];
+    return {
+      n: index + 1,
+      findingId: finding.id,
+      slot: finding.slot || "none",
+      tier: finding.tier!,
+      claim: finding.claim,
+      sourceIds: finding.citations.map((citation) => citation.sourceId),
+      date: dates.sort().at(-1)?.slice(0, 10) || "",
+      parts: [...new Set(finding.parts || [])],
+      verified: !!finding.verified,
+    };
+  });
+  const organisation = get(w.organisations, orgId);
+  const role = roleView(w, get(w.roles, roleId));
+  const pack: PackV2 = {
+    schemaVersion: "2.0.0",
     id: randomUUID(),
     revision,
     createdAt: now(),
@@ -701,8 +1167,8 @@ export function makePack(
     reviewer: status === "ready" ? actor : "",
     status,
     employerApproval: false,
-    organisation: get(w.organisations, orgId),
-    role: roleView(w, get(w.roles, roleId)),
+    organisation,
+    role,
     findings,
     sources,
     activities: w.activities.filter(
@@ -722,12 +1188,28 @@ export function makePack(
         .flatMap((j) => j.errors),
       "Research readiness is not the organisation's approval. Occupational context and activity ideas require validation by the organisation.",
     ],
+    header: {
+      organisation: organisation.name,
+      entity: organisation.division,
+      role: role.title,
+      compiledBy: actor,
+      started: organisation.createdAt,
+      lastUpdated: now(),
+      factChecker: organisation.factChecker
+        ? `${organisation.factChecker.name}, ${organisation.factChecker.jobTitle}`
+        : "",
+    },
+    tiers: tierNames,
+    sections: sectionRows,
+    register,
+    toConfirm: register.filter((row) => row.tier > 1 && row.parts.length > 0 && !row.verified),
   };
-  packSchema.parse(pack);
-  return structuredClone(pack);
+  const parsed = packSchema.parse(pack);
+  return structuredClone(parsed) as unknown as Pack;
 }
 const heading = (v: string) => v.replace(/[\r\n]/g, " ");
 export function packMarkdown(p: Pack): string {
+  if (p.schemaVersion === "2.0.0") return packMarkdownV2(p);
   const out = [
     `# ${heading(p.organisation.name)} — ${heading(p.role.title)}`,
     `Pack ${p.id} · Revision ${p.revision} · Schema ${p.schemaVersion}`,
@@ -743,7 +1225,7 @@ export function packMarkdown(p: Pack): string {
       (o) =>
         `### ${heading(o.scheme)} ${heading(o.code)} — ${heading(o.title)}\n\n${o.rationale}\n\nSource: ${o.sourceUrl} · Dataset: ${o.datasetVersion} · ${o.status}\n\nActivities: ${o.activities.join("; ")}\n\nSkills: ${(o.skills || []).join("; ")}\n\nKnowledge: ${(o.knowledge || []).join("; ")}\n\nWork context: ${(o.workContext || []).join("; ")}`,
     ),
-    "## Evidence register",
+    "## Fact register",
   ];
   for (const f of p.findings)
     out.push(
@@ -756,7 +1238,7 @@ export function packMarkdown(p: Pack): string {
   out.push("## Candidate activities — proposals");
   for (const a of p.activities)
     out.push(
-      `### ${heading(a.title)} · ${a.id}\n\nAction: ${a.action}\n\nOutput: ${a.output}\n\nMaterials: ${a.materials}\n\nLearning: ${a.learning}\n\nOrganisation confirmation: ${a.confirmation || "Required during storyboard review"}\n\nFinding references: ${a.findingIds.join(", ")}\n\nReview: ${a.review}`,
+      `### ${heading(a.title)} · ${a.id}\n\nAction: ${a.action}\n\nOutput: ${a.output}\n\nMaterials: ${a.materials}\n\nLearning: ${a.learning}\n\nOrganisation confirmation: ${a.confirmation || "Required during storyboard review"}\n\nFact references: ${a.findingIds.join(", ")}\n\nReview: ${a.review}`,
     );
   out.push("## Sources and materials");
   for (const s of p.sources)
@@ -778,4 +1260,102 @@ export function packMarkdown(p: Pack): string {
     "```",
   );
   return out.join("\n\n") + "\n";
+}
+const cell = (value: string) => value.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+function packMarkdownV2(p: PackV2): string {
+  const sourceNames = new Map(p.sources.map((source) => [source.id, source.title]));
+  const sourceText = (ids: string[]) => ids.map((id) => sourceNames.get(id) || id).join("; ");
+  const reference = (value: string, sourceId: string) =>
+    `- ${value} — Source: ${sourceNames.get(sourceId) || sourceId}`;
+  const rowText = (
+    row: PackV2["register"][number],
+    columns: NonNullable<(typeof slotFields)[Slot]>,
+  ) => {
+    const sources = row.sourceIds.map((id) => sourceNames.get(id) || id).join("; ");
+    const finding = p.findings.find((item) => item.id === row.findingId);
+    const values = columns.map((column, index) => {
+      const value = finding?.fields?.[column.key];
+      if (value === undefined) return index === 0 ? row.claim : "";
+      return Array.isArray(value) ? value.join("; ") : String(value);
+    });
+    return `| ${values.map((value) => cell(value)).join(" | ")} | ${row.tier} | ${cell(sources)} | ${row.date || "—"} |`;
+  };
+  const out = [
+    `# ${heading(p.organisation.name)} · organisation knowledge base`,
+    "| Organisation | Entity | Role | Compiled by | Started | Last updated | Fact checker |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
+    `| ${cell(p.header.organisation)} | ${cell(p.header.entity || "—")} | ${cell(p.header.role)} | ${cell(p.header.compiledBy)} | ${p.header.started.slice(0, 10)} | ${p.header.lastUpdated.slice(0, 10)} | ${cell(p.header.factChecker || "Not yet named")} |`,
+    "**Research readiness is not the organisation's approval.**",
+    "### How to read this",
+    "| Tier | Meaning |",
+    "| --- | --- |",
+    ...([1, 2, 3, 4] as const).map((tier) => `| ${tier} | ${cell(p.tiers[tier])} |`),
+  ];
+  p.sections.forEach((section, index) => {
+    out.push(`## ${index + 1}. ${section.title}`);
+    if (section.section === "brand" && p.organisation.brand) {
+      const brand = p.organisation.brand;
+      out.push(
+        "### Brand guidance",
+        `Guidelines: ${brand.guidelines || "Not recorded."}\n\nLogo rules: ${brand.logo || "Not recorded."}\n\nPhotography: ${brand.photography || "Not recorded."}\n\nHouse style: ${brand.houseStyle || "Not recorded."}`,
+      );
+    }
+    if (section.section === "supplied" && p.role.interview) {
+      const interview = p.role.interview;
+      out.push(
+        "### Interview record",
+        `Who: ${interview.who}\n\nJob title: ${interview.jobTitle}\n\nTime in role: ${interview.timeInRole || "Not recorded"}\n\nMay be named: ${interview.mayBeNamed ? "Yes" : "No"}\n\nDate: ${interview.date || "Not recorded"}\n\nHow: ${interview.how || "Not recorded"}\n\nRecording: ${interview.recordingSourceId ? sourceNames.get(interview.recordingSourceId) || interview.recordingSourceId : "Not recorded"}\n\nTranscript: ${interview.transcriptSourceId ? sourceNames.get(interview.transcriptSourceId) || interview.transcriptSourceId : "Not recorded"}`,
+      );
+    }
+    for (const slot of section.slots) {
+      out.push(`### ${slot.label}`);
+      const rows = slot.findingIds.map((id) => p.register.find((row) => row.findingId === id)).filter(Boolean) as PackV2["register"];
+      let referenceRendered = false;
+      if (slot.slot === "role.standard" && p.role.standard) {
+        const standard = p.role.standard;
+        out.push(`${standard.name}\n\nLevel: ${standard.level} · Duration: ${standard.duration}\n\nStandard: ${standard.url || "Not recorded"}\n\nAssessment plan: ${standard.assessmentPlanUrl || "Not recorded"}`);
+        referenceRendered = true;
+      } else if (slot.slot === "role.ncs" && p.role.ncsUrl) {
+        out.push(p.role.ncsUrl);
+        referenceRendered = true;
+      } else if (slot.slot === "role.body" && p.role.professionalBody) {
+        const body = p.role.professionalBody;
+        out.push(`${body.name}\n\nRegistration route: ${body.registrationRoute || "Not recorded"}\n\nFramework: ${body.frameworkUrl || "Not recorded"}`);
+        referenceRendered = true;
+      } else if (slot.slot === "supplied.may-use" && p.organisation.mayUse?.length) {
+        out.push(...p.organisation.mayUse.map((item) => reference(item.text, item.sourceId)));
+        referenceRendered = true;
+      } else if (slot.slot === "supplied.must-not-say" && p.organisation.mustNotSay?.length) {
+        out.push(...p.organisation.mustNotSay.map((item) => reference(item.text, item.sourceId)));
+        referenceRendered = true;
+      }
+      if (!rows.length && !referenceRendered) out.push("_Not yet researched._");
+      else if (rows.length && slots.find((item) => item.slot === slot.slot)?.table) {
+        const columns = slotFields[slot.slot]!;
+        out.push(
+          `| ${columns.map((column) => column.label).join(" | ")} | Tier | Source | Date |`,
+          `| ${[...columns.map(() => "---"), "---", "---", "---"].join(" | ")} |`,
+          ...rows.map((row) => rowText(row, columns)),
+        );
+      } else out.push(...rows.map((row) => `${row.claim}\n\nTier ${row.tier} · ${row.sourceIds.map((id) => sourceNames.get(id) || id).join("; ") || "No source"} · ${row.date || "No date"} · ${row.parts.join(", ") || "No chapter parts"}`));
+    }
+  });
+  out.push(
+    "## 7. Fact register",
+    "| # | Fact | Tier | Source | Date | Parts | Verified |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
+    ...p.register.map((row) => `| ${row.n} | ${cell(row.claim)} | ${row.tier} | ${cell(sourceText(row.sourceIds))} | ${row.date || "—"} | ${row.parts.join(", ") || "—"} | ${row.verified ? "Yes" : "No"} |`),
+    "## 8. Questions for the organisation",
+    ...(p.questions.length ? p.questions.map((question) => `- ${question.text}${question.answer ? ` — ${question.answer}` : ""}`) : ["_No questions recorded._"]),
+    "## For the organisation to confirm",
+    ...(p.toConfirm.length ? p.toConfirm.map((row) => `- #${row.n} ${row.claim}`) : ["_Nothing awaiting confirmation._"]),
+    "## Limitations",
+    ...p.limitations.map((limitation) => `- ${limitation}`),
+    "## Complete research pack metadata",
+    "The JSON below preserves every field from this same fixed research pack.",
+    "```json",
+    JSON.stringify(p, null, 2),
+    "```",
+  );
+  return `${out.join("\n\n")}\n`;
 }

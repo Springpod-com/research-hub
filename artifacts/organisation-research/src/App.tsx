@@ -16,8 +16,21 @@ import type {
   Pack,
   Session,
   ResearchJob,
+  Folder,
+  Part,
+  Rights,
+  Section,
+  SectionsResponse,
+  Slot,
+  Tier,
 } from "../shared/types";
-import { labels as sharedLabels } from "../shared/types";
+import {
+  labels as sharedLabels,
+  sectionOfSlot,
+  sections as sharedSections,
+  slots,
+  tierNames,
+} from "../shared/types";
 import {
   api,
   apiTagged,
@@ -37,6 +50,16 @@ import {
   type OccupationRecord,
 } from "./components/occupation-matcher";
 import { ResearchDialog } from "./components/research-dialog";
+import { SectionsView } from "./components/sections-view";
+import { FactPlacement } from "./components/fact-placement";
+import { QuestionFactDialog } from "./components/question-fact-dialog";
+import { RecordFactDialog } from "./components/record-fact-dialog";
+import {
+  FactFields,
+  factFieldsClaim,
+  normaliseFactFields,
+  type FactFieldValues,
+} from "./components/fact-fields";
 import { AutoTextarea } from "./components/auto-textarea";
 import { useFormCloseGuard } from "./components/form-close-guard";
 import { TabStrip, useScrolledPast } from "./components/tab-strip";
@@ -60,9 +83,18 @@ const READINESS_HELP =
   "Readiness means the role's research passes the handover checks: responsibilities are described, evidence is accepted and valid, reviews and blocking questions are complete, changed sources are rechecked, and research runs have finished. It is a research milestone, not the organisation's approval.";
 const labels: Record<string, string> = {
   ...sharedLabels,
-  company: "Organisation fact",
-  client: "Ask the organisation",
 };
+const FOLDER_OPTIONS: [string, string][] = [
+  ["auto", "Choose automatically"],
+  ...sharedSections.map(
+    (section) => [section.folder, section.title] as [string, string],
+  ),
+];
+const folderTitle = (folder?: Folder) =>
+  sharedSections.find((section) => section.folder === folder)?.title ||
+  "Choose automatically";
+const slotLabel = (slot?: Slot) =>
+  slots.find((item) => item.slot === slot)?.label;
 const TABS: [string, string][] = [
   ["overview", "Overview"],
   ["roles", "Roles"],
@@ -384,6 +416,9 @@ export function App({
   const [modal, setModal] = useState<Modal>();
   const [evidence, setEvidence] = useState<Finding>();
   const [source, setSource] = useState<Source>();
+  const [sectionData, setSectionData] = useState<SectionsResponse>();
+  const [sectionsLoading, setSectionsLoading] = useState(false);
+  const [sectionsError, setSectionsError] = useState("");
   const [matcher, setMatcher] = useState<Role>();
   const [cancelling, setCancelling] = useState<ResearchJob>();
   const [busy, setBusy] = useState(false);
@@ -413,13 +448,21 @@ export function App({
   const setFilter = (v: string) => setParam("status", v, "all");
   const requestedRole = query.get("role") || "all";
   const setRoleId = (v: string) => setParam("role", v, "all");
-  const evidenceMode = query.get("view") === "sources" ? "sources" : "findings";
-  const setEvidenceMode = (v: string) => setParam("view", v, "findings");
+  const evidenceMode = ["findings", "sources"].includes(query.get("view") || "")
+    ? query.get("view")!
+    : "sections";
+  const setEvidenceMode = (v: string) => setParam("view", v, "sections");
+  const sectionFilter = (query.get("section") || "all") as Section | "all";
+  const setSectionFilter = (v: string) => setParam("section", v, "all");
+  const tierFilter = query.get("tier") || "all";
+  const sourceFilter = query.get("source") || "all";
+  const runFilter = query.get("run") || "all";
   // Clears the search and status filter but keeps the role scope, which is a
   // deliberate choice of view rather than a filter.
   const clearFilters = () => {
     const next = new URLSearchParams(query);
-    for (const k of ["q", "status"]) next.delete(k);
+    for (const k of ["q", "status", "section", "tier", "source", "run"])
+      next.delete(k);
     replaceQuery(next);
   };
   const unauthorised = useRef(0);
@@ -549,6 +592,33 @@ export function App({
   const roleId = orgRoles.some((r) => r.id === requestedRole)
     ? requestedRole
     : "all";
+  useEffect(() => {
+    if (!org) {
+      setSectionData(undefined);
+      setSectionsError("");
+      setSectionsLoading(false);
+      return;
+    }
+    let live = true;
+    setSectionData(undefined);
+    setSectionsError("");
+    setSectionsLoading(true);
+    api<SectionsResponse>(
+      `/orgs/${org.id}/sections${roleId === "all" ? "" : `?roleId=${encodeURIComponent(roleId)}`}`,
+    )
+      .then((result) => {
+        if (live) setSectionData(result);
+      })
+      .catch((caught) => {
+        if (live) setSectionsError((caught as Error).message);
+      })
+      .finally(() => {
+        if (live) setSectionsLoading(false);
+      });
+    return () => {
+      live = false;
+    };
+  }, [org?.id, roleId, data]);
   // ...and the address is corrected to match, so a copied link or Back does
   // not carry a scope that is not the one shown.
   useEffect(() => {
@@ -594,6 +664,8 @@ export function App({
         s.orgId === org?.id &&
         (roleId === "all" || !s.roleIds.length || s.roleIds.includes(roleId)),
     ) || [];
+  const organisationSources =
+    data?.sources.filter((source) => source.orgId === org?.id) || [];
   const packs =
     data?.packs.filter(
       (p) =>
@@ -650,7 +722,7 @@ export function App({
       ? ([
           {
             name: "division",
-            label: "Division or business unit",
+            label: "The entity the learner meets",
             value: o.division,
           },
           {
@@ -662,10 +734,69 @@ export function App({
           },
           {
             name: "brandNotes",
-            label: "Brand guidance and asset notes",
+            label: "Brand",
             value: o.brandNotes,
             kind: "textarea",
           },
+          {
+            name: "factCheckerStatus",
+            label: "Who at the organisation checks facts",
+            value:
+              o.factChecker &&
+              o.factChecker.name.trim().toLowerCase() !== "not yet known"
+                ? "named"
+                : "unknown",
+            kind: "select",
+            options: [["unknown", "Not yet known"], ["named", "Named contact"]],
+          },
+          {
+            name: "factCheckerName",
+            label: "Fact checker — name",
+            value: o.factChecker?.name,
+            hint: "Leave both fields blank if this is not yet known.",
+          },
+          {
+            name: "factCheckerJobTitle",
+            label: "Who at the organisation checks facts — job title",
+            value: o.factChecker?.jobTitle,
+          },
+          { name: "brandGuidelines", label: "Brand guidelines and where they live", value: o.brand?.guidelines, kind: "textarea" },
+          { name: "brandLogo", label: "Logo rules", value: o.brand?.logo, kind: "textarea" },
+          { name: "brandPhotography", label: "Photography", value: o.brand?.photography, kind: "textarea" },
+          { name: "brandHouseStyle", label: "House style", value: o.brand?.houseStyle, kind: "textarea" },
+          ...(["mayUse", "mustNotSay"] as const).flatMap((key) => {
+            const items = [...(o[key] || []), { text: "", sourceId: "none" }];
+            const heading =
+              key === "mayUse"
+                ? "Names we may use"
+                : "Things we must not say";
+            return items.flatMap((item, index): Field[] => [
+              {
+                name: `${key}Text${index}`,
+                label: index === 0 ? heading : `${heading} — item ${index + 1}`,
+                value: item.text,
+                hint:
+                  index === items.length - 1
+                    ? "Use the final empty row to add another item."
+                    : undefined,
+              },
+              {
+                name: `${key}Source${index}`,
+                label: `Tier-1 source for item ${index + 1}`,
+                value: item.sourceId || "none",
+                kind: "select",
+                options: [
+                  ["none", "Not selected"],
+                  ...organisationSources
+                    .filter((source) => source.tier === 1)
+                    .map(
+                      (source) =>
+                        [source.id, source.title] as [string, string],
+                    ),
+                ],
+              },
+            ]);
+          }),
         ] satisfies Field[])
       : []),
   ];
@@ -693,6 +824,23 @@ export function App({
             kind: "textarea",
             hint: "What can this person decide, and when must they ask for help?",
           },
+          { name: "standardName", label: "Apprenticeship standard — name", value: r.standard?.name },
+          { name: "standardLevel", label: "Apprenticeship standard — level", value: r.standard?.level },
+          { name: "standardDuration", label: "Apprenticeship standard — duration", value: r.standard?.duration },
+          { name: "standardUrl", label: "Apprenticeship standard — URL", value: r.standard?.url, validateUrl: true },
+          { name: "assessmentPlanUrl", label: "Assessment plan URL", value: r.standard?.assessmentPlanUrl, validateUrl: true },
+          { name: "ncsUrl", label: "National Careers Service profile URL", value: r.ncsUrl, validateUrl: true },
+          { name: "bodyName", label: "Professional body — name", value: r.professionalBody?.name },
+          { name: "registrationRoute", label: "Professional body — registration route", value: r.professionalBody?.registrationRoute },
+          { name: "frameworkUrl", label: "Professional body — framework URL", value: r.professionalBody?.frameworkUrl, validateUrl: true },
+          { name: "interviewWho", label: "Interview — who", value: r.interview?.who },
+          { name: "interviewJobTitle", label: "Interview — job title", value: r.interview?.jobTitle },
+          { name: "timeInRole", label: "Interview — time in role", value: r.interview?.timeInRole },
+          { name: "mayBeNamed", label: "Interview — may be named", value: r.interview?.mayBeNamed ? "true" : "false", kind: "select", options: [["false", "No"], ["true", "Yes"]] },
+          { name: "interviewDate", label: "Interview — date", value: r.interview?.date },
+          { name: "interviewHow", label: "Interview — how it took place", value: r.interview?.how },
+          { name: "recordingSourceId", label: "Interview — recording source", value: r.interview?.recordingSourceId || "none", kind: "select", options: [["none", "Not selected"], ...organisationSources.map((source) => [source.id, source.title] as [string, string])] },
+          { name: "transcriptSourceId", label: "Interview — transcript source", value: r.interview?.transcriptSourceId || "none", kind: "select", options: [["none", "Not selected"], ...organisationSources.map((source) => [source.id, source.title] as [string, string])] },
         ] satisfies Field[])
       : []),
   ];
@@ -737,12 +885,48 @@ export function App({
                 )
           }
           onSubmit={async (v) => {
+            const {
+              factCheckerStatus, factCheckerName, factCheckerJobTitle,
+              brandGuidelines, brandLogo, brandPhotography, brandHouseStyle,
+              ...base
+            } = v;
+            const attributed = (key: "mayUse" | "mustNotSay") =>
+              Object.keys(v)
+                .filter((name) => name.startsWith(`${key}Text`))
+                .sort(
+                  (a, b) =>
+                    Number(a.slice(`${key}Text`.length)) -
+                    Number(b.slice(`${key}Text`.length)),
+                )
+                .map((name) => {
+                  const index = name.slice(`${key}Text`.length);
+                  return {
+                    text: v[name].trim(),
+                    sourceId: v[`${key}Source${index}`],
+                  };
+                })
+                .filter((item) => item.text);
+            const cleanBase = Object.fromEntries(
+              Object.entries(base).filter(
+                ([name]) =>
+                  !/^(mayUse|mustNotSay)(Text|Source)\d+$/.test(name),
+              ),
+            );
+            const organisationValues = m ? {
+              ...cleanBase,
+              factChecker: factCheckerStatus === "named"
+                ? { name: factCheckerName, jobTitle: factCheckerJobTitle }
+                : { name: "not yet known", jobTitle: "" },
+              brand: { guidelines: brandGuidelines, logo: brandLogo, photography: brandPhotography, houseStyle: brandHouseStyle },
+              mayUse: attributed("mayUse"),
+              mustNotSay: attributed("mustNotSay"),
+            } : base;
             const created = m
               ? await patch(`/organisations/${m.id}`, {
-                  ...v,
+                  ...organisationValues,
                   version: m.version,
                 })
-              : await post("/organisations", v);
+              : await post("/organisations", organisationValues);
             await reload();
             U.toast({
               title: m ? "Organisation updated" : "Organisation created",
@@ -758,15 +942,32 @@ export function App({
           description="Keep the organisation’s own job title. Describe the work so occupational matches can be checked."
           fields={roleFields(m)}
           onClose={close}
-          onSubmit={async (v) =>
-            save(
+          onSubmit={async (v) => {
+            const {
+              standardName, standardLevel, standardDuration, standardUrl, assessmentPlanUrl,
+              bodyName, registrationRoute, frameworkUrl,
+              interviewWho, interviewJobTitle, timeInRole, mayBeNamed, interviewDate,
+              interviewHow, recordingSourceId, transcriptSourceId, ...base
+            } = v;
+            const roleValues = m ? {
+              ...base,
+              standard: standardName.trim() ? { name: standardName, level: standardLevel, duration: standardDuration, url: standardUrl, assessmentPlanUrl } : null,
+              professionalBody: bodyName.trim() ? { name: bodyName, registrationRoute, frameworkUrl } : null,
+              interview: interviewWho.trim() ? {
+                who: interviewWho, jobTitle: interviewJobTitle, timeInRole,
+                mayBeNamed: mayBeNamed === "true", date: interviewDate, how: interviewHow,
+                recordingSourceId: recordingSourceId === "none" ? undefined : recordingSourceId,
+                transcriptSourceId: transcriptSourceId === "none" ? undefined : transcriptSourceId,
+              } : null,
+            } : base;
+            return save(
               () =>
                 m
-                  ? patch(`/roles/${m.id}`, { ...v, version: m.version })
-                  : post(`/organisations/${org!.id}/roles`, v),
+                  ? patch(`/roles/${m.id}`, { ...roleValues, version: m.version })
+                  : post(`/organisations/${org!.id}/roles`, roleValues),
               m ? "Role updated" : "Role added",
-            )
-          }
+            );
+          }}
         />
       );
     if (modal.type === "delete-role") {
@@ -816,7 +1017,7 @@ export function App({
               )}
               <ul className="text-p4 list-disc pl-5 space-y-1">
                 <li>
-                  {impact.findings} finding{impact.findings === 1 ? "" : "s"}{" "}
+                  {impact.findings} fact{impact.findings === 1 ? "" : "s"}{" "}
                   scoped to this role will be deleted, with{" "}
                   {impact.findings === 1 ? "its" : "their"} review history.
                 </li>
@@ -829,7 +1030,7 @@ export function App({
                   for this role will be deleted.
                 </li>
                 <li>
-                  Organisation-wide findings and questions are not affected.
+                  Organisation-wide facts and questions are not affected.
                   Sources stay with the organisation
                   {impact.sources > 0 &&
                     ` (${impact.sources} will no longer be linked to this role)`}
@@ -872,6 +1073,11 @@ export function App({
                 ["statement", "Statement from the organisation or team"],
                 ["document", "Document excerpt"],
                 ["occupation", "Occupational reference"],
+                ["film", "Film"],
+                ["advert", "Job advert"],
+                ["screenshot", "Screenshot"],
+                ["standard", "Apprenticeship standard"],
+                ["guidance", "Professional guidance"],
               ],
             },
             {
@@ -897,6 +1103,33 @@ export function App({
                 ["public-source", "Public source"],
               ],
             },
+            {
+              name: "providedByName",
+              label: "Organisation contact name (if confirmed)",
+            },
+            {
+              name: "providedByJobTitle",
+              label: "Organisation contact job title (if confirmed)",
+            },
+            {
+              name: "rights",
+              label: "Media rights",
+              value: "none",
+              kind: "select",
+              options: [
+                ["none", "Not applicable or not recorded"],
+                ["organisation-supplied", "Supplied by the organisation"],
+                ["press-kit", "Press kit"],
+                ["reference-only", "Reference only"],
+              ],
+            },
+            {
+              name: "folder",
+              label: "Section",
+              value: "auto",
+              kind: "select",
+              options: FOLDER_OPTIONS,
+            },
             { name: "locator", label: "Page, section or meeting reference" },
             scopeField,
           ]}
@@ -905,8 +1138,24 @@ export function App({
             save(
               () =>
                 post(`/organisations/${org!.id}/sources`, {
-                  ...v,
+                  title: v.title,
+                  kind: v.kind,
+                  text: v.text,
+                  url: v.url,
+                  suppliedBy: v.suppliedBy,
+                  verification: v.verification,
+                  locator: v.locator,
                   roleIds: v.roleId === "all" ? [] : [v.roleId],
+                folder: v.folder === "auto" ? undefined : v.folder,
+                rights: v.rights === "none" ? undefined : v.rights,
+                providedBy:
+                  v.verification === "client-confirmed" &&
+                  v.providedByName.trim()
+                    ? {
+                        name: v.providedByName,
+                        jobTitle: v.providedByJobTitle,
+                      }
+                    : undefined,
                 }),
               "Source recorded",
             )
@@ -925,6 +1174,13 @@ export function App({
               required: true,
               validateUrl: true,
             },
+            {
+              name: "folder",
+              label: "Section",
+              value: "auto",
+              kind: "select",
+              options: FOLDER_OPTIONS,
+            },
             scopeField,
           ]}
           onClose={close}
@@ -935,6 +1191,7 @@ export function App({
                 post(`/organisations/${org!.id}/web-source`, {
                   url: v.url,
                   roleId: v.roleId === "all" ? undefined : v.roleId,
+                  folder: v.folder === "auto" ? undefined : v.folder,
                 }),
               "Page captured",
             )
@@ -960,6 +1217,44 @@ export function App({
               kind: "textarea",
               hint: "For photos, describe the location, relevant role and anything the image cannot establish.",
             },
+            {
+              name: "verification",
+              label: "Verification basis",
+              value: "user-supplied",
+              kind: "select",
+              options: [
+                ["user-supplied", "Team-supplied information"],
+                ["client-confirmed", "Confirmed by the organisation"],
+                ["public-source", "Public source"],
+              ],
+            },
+            {
+              name: "providedByName",
+              label: "Organisation contact name (if confirmed)",
+            },
+            {
+              name: "providedByJobTitle",
+              label: "Organisation contact job title (if confirmed)",
+            },
+            {
+              name: "rights",
+              label: "Image or film rights",
+              value: "none",
+              kind: "select",
+              options: [
+                ["none", "Not recorded"],
+                ["organisation-supplied", "Supplied by the organisation"],
+                ["press-kit", "Press kit"],
+                ["reference-only", "Reference only"],
+              ],
+            },
+            {
+              name: "folder",
+              label: "Section",
+              value: "auto",
+              kind: "select",
+              options: FOLDER_OPTIONS,
+            },
             scopeField,
           ]}
           onClose={close}
@@ -970,6 +1265,20 @@ export function App({
             form.append("file", file);
             form.append("title", v.title);
             form.append("caption", v.caption);
+            if (v.folder !== "auto") form.append("folder", v.folder);
+            if (v.rights !== "none") form.append("rights", v.rights);
+            if (
+              v.verification === "client-confirmed" &&
+              v.providedByName.trim()
+            ) {
+              form.append(
+                "providedBy",
+                JSON.stringify({
+                  name: v.providedByName,
+                  jobTitle: v.providedByJobTitle,
+                }),
+              );
+            }
             if (v.roleId !== "all") form.append("roleId", v.roleId);
             await save(
               () =>
@@ -984,108 +1293,16 @@ export function App({
       );
     if (modal.type === "finding")
       return (
-        <FormModal
-          title="Record a finding"
-          description="Capture one claim. Factual findings require an exact quotation from a source in this organisation."
-          fields={[
-            {
-              name: "claim",
-              label: "Finding",
-              required: true,
-              kind: "textarea",
-            },
-            {
-              name: "kind",
-              label: "Classification",
-              value: "company",
-              kind: "select",
-              options: [
-                ["company", "Organisation fact"],
-                ["occupation", "Occupational context"],
-                ["proposal", "Design proposal"],
-              ],
-            },
-            {
-              name: "sourceId",
-              label: "Supporting source",
-              value:
-                sources.find((s) => s.text.trim() && s.kind !== "occupation")
-                  ?.id ||
-                sources.find((s) => s.text.trim())?.id ||
-                "none",
-              kind: "select",
-              options: [
-                ["none", "No source (design proposals only)"],
-                ...sources.map(
-                  (s) =>
-                    [
-                      s.id,
-                      s.text.trim() ? s.title : `${s.title} (no captured text)`,
-                    ] as [string, string],
-                ),
-              ],
-              hint: "Required for facts about the organisation and occupational context. Images have no captured text and cannot supply a quotation.",
-            },
-            {
-              name: "quote",
-              label: "Exact supporting passage",
-              kind: "textarea",
-              hint: "Required for facts about the organisation and occupational context; optional for design proposals. Copy the passage word for word from the source’s captured text. Line breaks and spacing do not matter; the wording must be identical.",
-            },
-            {
-              name: "locator",
-              label: "Page or section",
-              value: "Source excerpt",
-            },
-            {
-              name: "rationale",
-              label: "Scope or uncertainty",
-              kind: "textarea",
-            },
-            scopeField,
-          ]}
+        <RecordFactDialog
+          initialSlot={m?.slot}
+          sources={organisationSources}
+          roleId={roleId}
+          roleOptions={roleOptions}
           onClose={close}
-          onSubmit={async (v) => {
-            // Explain the evidence rules before the request so a missing
-            // passage reads as guidance rather than a validation code.
-            const chosen =
-              v.sourceId === "none"
-                ? undefined
-                : sources.find((s) => s.id === v.sourceId);
-            // A design proposal needs no evidence: the pre-selected source is
-            // ignored unless a passage was actually pasted for it.
-            const source =
-              v.kind === "proposal" && !v.quote.trim() ? undefined : chosen;
-            if (v.kind !== "proposal" && !source)
-              throw new Error(
-                "Facts about the organisation and occupational context need a supporting source. Choose one and paste the exact passage, or classify the finding as a design proposal.",
-              );
-            if (source && !source.text.trim())
-              throw new Error(
-                `“${source.title}” has no captured text, so it cannot supply a quotation. Images are not read automatically; cite a web page or text document instead.`,
-              );
-            if (source && !v.quote.trim())
-              throw new Error(
-                `Paste the exact supporting passage from “${source.title}”.`,
-              );
+          onSubmit={async (value) => {
             await save(
-              () =>
-                post(`/organisations/${org!.id}/findings`, {
-                  claim: v.claim,
-                  kind: v.kind,
-                  rationale: v.rationale,
-                  roleId: v.roleId === "all" ? undefined : v.roleId,
-                  citations: source
-                    ? [
-                        {
-                          sourceId: source.id,
-                          quote: v.quote,
-                          locator: v.locator,
-                        },
-                      ]
-                    : [],
-                }),
-              "Finding recorded",
+              () => post(`/organisations/${org!.id}/findings`, value),
+              "Fact recorded",
             );
           }}
         />
@@ -1096,7 +1313,7 @@ export function App({
           title={
             m ? "Respond to question" : "Add a question for the organisation"
           }
-          description="An answer does not automatically verify a finding. Record its source and review affected evidence separately."
+          description="An answer does not automatically verify a fact. Record its source and review affected facts separately."
           fields={
             m
               ? [
@@ -1166,6 +1383,17 @@ export function App({
               m ? "Question updated" : "Question added",
             )
           }
+        />
+      );
+    if (modal.type === "question-fact")
+      return (
+        <QuestionFactDialog
+          question={m}
+          onClose={close}
+          onSaved={async () => {
+            await reload();
+            U.toast({ title: "Fact created from the answer" });
+          }}
         />
       );
     if (modal.type === "occupation")
@@ -1326,8 +1554,8 @@ export function App({
           tiers={session?.providers || {}}
           initialRoleId={roleId === "all" ? undefined : roleId}
           onClose={close}
-          onStart={async (tier, scopeRoleId) => {
-            await startResearch(tier, scopeRoleId);
+          onStart={async (tier, scopeRoleId, sections, sourceIds) => {
+            await startResearch(tier, scopeRoleId, sections, sourceIds);
           }}
         />
       );
@@ -1384,7 +1612,7 @@ export function App({
                 (f) =>
                   f.review === "unreviewed" || f.review === "clarification",
               ).length || 0,
-              "Findings waiting for a closer look",
+              "Facts waiting for a closer look",
             ],
             [
               "Research packs",
@@ -1533,10 +1761,17 @@ export function App({
       Start research
     </U.Button>
   );
-  const startResearch = async (tier: string, scopeRoleId?: string) => {
+  const startResearch = async (
+    tier: string,
+    scopeRoleId?: string,
+    sections?: Section[],
+    sourceIds?: string[],
+  ) => {
     const job: ResearchJob = await post(`/organisations/${org!.id}/research`, {
       tier,
       roleId: scopeRoleId,
+      sections,
+      sourceIds,
     });
     await reload();
     U.toast({
@@ -1702,7 +1937,7 @@ export function App({
                   !orgSources.length,
                 )}
                 {detail(
-                  "Findings",
+                  "Facts",
                   orgFindings.length
                     ? `${accepted} accepted · ${awaiting} awaiting review`
                     : "None yet",
@@ -1822,7 +2057,7 @@ export function App({
             {!runs.length ? (
               <Empty
                 title="No research runs yet"
-                description="Research reads the organisation website and captured sources, then drafts findings and questions for review."
+                description="Research reads the organisation website and captured sources, then drafts facts and questions for review."
                 action={
                   <U.Button
                     variant="outline"
@@ -1882,8 +2117,26 @@ export function App({
     const shownFindings = findings.filter(
       (f) =>
         (filter === "all" || f.review === filter) &&
+        (sectionFilter === "all" ||
+          sectionOfSlot(f.slot) === sectionFilter) &&
+        (tierFilter === "all" || String(f.tier) === tierFilter) &&
+        (sourceFilter === "all" ||
+          f.citations.some((citation) => citation.sourceId === sourceFilter)) &&
+        (runFilter === "all" || f.runIds.includes(runFilter)) &&
         f.claim.toLowerCase().includes(search.toLowerCase()),
     );
+    const shownSources = sources.filter(
+      (source) =>
+        sectionFilter === "all" ||
+        sharedSections.find((section) => section.folder === source.folder)
+          ?.section === sectionFilter,
+    );
+    const reviewShown = async (review: "accepted" | "rejected") => {
+      await post("/findings/bulk-review", {
+        ids: shownFindings.map((finding) => finding.id),
+        review,
+      });
+    };
     const orgHasFindings = data?.findings.some((f) => f.orgId === org?.id);
     const orgHasSources = data?.sources.some((x) => x.orgId === org?.id);
     return (
@@ -1891,10 +2144,16 @@ export function App({
         <div className="flex flex-col sm:flex-row justify-between gap-4">
           <div className="flex flex-wrap gap-2">
             <U.Button
+              variant={evidenceMode === "sections" ? "secondary" : "ghost"}
+              onClick={() => setEvidenceMode("sections")}
+            >
+              Sections
+            </U.Button>
+            <U.Button
               variant={evidenceMode === "findings" ? "secondary" : "ghost"}
               onClick={() => setEvidenceMode("findings")}
             >
-              Findings ({findings.length})
+              Facts ({findings.length})
             </U.Button>
             <U.Button
               variant={evidenceMode === "sources" ? "secondary" : "ghost"}
@@ -1907,15 +2166,37 @@ export function App({
             variant="outline"
             onClick={() =>
               setModal({
-                type: evidenceMode === "findings" ? "finding" : "upload",
+                type: evidenceMode === "sources" ? "upload" : "finding",
               })
             }
           >
             <U.IconAdd size={20} />
-            {evidenceMode === "findings" ? "Record finding" : "Upload material"}
+            {evidenceMode === "sources" ? "Upload material" : "Record fact"}
           </U.Button>
         </div>
-        {evidenceMode === "sources" ? (
+        {evidenceMode === "sections" ? (
+          sectionsError ? (
+            <U.Alert role="alert" variant="destructive">
+              <U.AlertTitle>Sections could not be loaded</U.AlertTitle>
+              <U.AlertDescription>{sectionsError}</U.AlertDescription>
+            </U.Alert>
+          ) : (
+            <SectionsView
+              sections={sectionData?.sections || []}
+              selected={
+                sectionFilter === "all" ? undefined : (sectionFilter as Section)
+              }
+              loading={sectionsLoading}
+              onSelect={(section) => {
+                const next = new URLSearchParams(query);
+                next.set("section", section);
+                next.set("view", "findings");
+                replaceQuery(next);
+              }}
+              onFill={(slot) => setModal({ type: "finding", item: { slot } })}
+            />
+          )
+        ) : evidenceMode === "sources" ? (
           <>
             <div className="flex flex-wrap gap-3">
               <U.Button
@@ -1936,10 +2217,24 @@ export function App({
             <DismissibleNote id="source-types" title="About source material">
               Capture a public page, upload a document or photo, or record what
               the organisation has told you. Each source stays linked to its
-              findings.
+              facts.
             </DismissibleNote>
+            <div className="sm:w-72">
+              <Pick
+                label="Section"
+                value={sectionFilter}
+                onChange={setSectionFilter}
+                options={[
+                  ["all", "All sections"],
+                  ...sharedSections.map(
+                    (section) =>
+                      [section.section, section.title] as [string, string],
+                  ),
+                ]}
+              />
+            </div>
             <U.DataTable
-              data={sources}
+              data={shownSources}
               getRowId={(s) => s.id}
               defaultPageSize={8}
               showColumnVisibility={false}
@@ -1969,7 +2264,22 @@ export function App({
                       statement: "Statement",
                       image: "Workplace image",
                       occupation: "Occupational reference",
+                      film: "Film",
+                      advert: "Job advert",
+                      screenshot: "Screenshot",
+                      standard: "Apprenticeship standard",
+                      guidance: "Professional guidance",
                     })[s.kind],
+                },
+                {
+                  id: "section",
+                  header: "Section",
+                  accessor: (s) => folderTitle(s.folder),
+                },
+                {
+                  id: "exportName",
+                  header: "Export file name",
+                  accessor: (s) => s.exportName || "Not available",
                 },
                 {
                   id: "date",
@@ -2024,33 +2334,128 @@ export function App({
           <>
             <div className="flex flex-col sm:flex-row gap-3">
               <U.Input
-                aria-label="Search findings"
-                placeholder="Search findings…"
+                aria-label="Search facts"
+                placeholder="Search facts…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 className="sm:max-w-sm"
               />
               <div className="sm:w-60">
                 <Pick
-                  label="Finding filter"
+                  label="Fact filter"
                   value={filter}
                   onChange={setFilter}
                   options={[
-                    ["all", "All findings"],
+                    ["all", "All facts"],
                     ["unreviewed", "Needs review"],
-                    ["accepted", "Accepted for drafting"],
+                    ["accepted", "Registered"],
                     ["clarification", "Needs clarification"],
                     ["rejected", "Excluded"],
                   ]}
                 />
               </div>
             </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <Pick
+                label="Section"
+                value={sectionFilter}
+                onChange={setSectionFilter}
+                options={[
+                  ["all", "All sections"],
+                  ...sharedSections.map(
+                    (section) =>
+                      [section.section, section.title] as [string, string],
+                  ),
+                ]}
+              />
+              <Pick
+                label="Tier"
+                value={tierFilter}
+                onChange={(value) => setParam("tier", value, "all")}
+                options={[
+                  ["all", "All tiers"],
+                  ...([1, 2, 3, 4] as Tier[]).map(
+                    (tier) =>
+                      [String(tier), `Tier ${tier} · ${tierNames[tier]}`] as [
+                        string,
+                        string,
+                      ],
+                  ),
+                ]}
+              />
+              <Pick
+                label="Source"
+                value={sourceFilter}
+                onChange={(value) => setParam("source", value, "all")}
+                options={[
+                  ["all", "All sources"],
+                  ...sources.map(
+                    (source) => [source.id, source.title] as [string, string],
+                  ),
+                ]}
+              />
+              <Pick
+                label="Research run"
+                value={runFilter}
+                onChange={(value) => setParam("run", value, "all")}
+                options={[
+                  ["all", "All runs"],
+                  ...runs.map(
+                    (researchRun) =>
+                      [
+                        researchRun.id,
+                        `${date(researchRun.createdAt)} · ${TIER_NAME[researchRun.tier]}`,
+                      ] as [string, string],
+                  ),
+                ]}
+              />
+            </div>
+            {!!shownFindings.length && (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-p5 text-muted-foreground">
+                  {shownFindings.length} fact
+                  {shownFindings.length === 1 ? "" : "s"} shown
+                </span>
+                <U.Button
+                  variant="outline"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() =>
+                    void run(
+                      () => reviewShown("accepted"),
+                      "Shown facts registered",
+                    )
+                  }
+                >
+                  Register all shown
+                </U.Button>
+                <U.Button
+                  variant="outline"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() =>
+                    void run(
+                      () => reviewShown("rejected"),
+                      "Shown facts excluded",
+                    )
+                  }
+                >
+                  Exclude all shown
+                </U.Button>
+              </div>
+            )}
             <div className="space-y-3">
               {shownFindings.map((f) => (
                 <U.Card key={f.id}>
                   <U.CardContent className="p-5">
                     <div className="flex flex-wrap gap-2 mb-3">
                       <U.Badge variant="outline">{labels[f.kind]}</U.Badge>
+                      <U.Badge variant="outline">
+                        Tier {f.tier || 4} · {tierNames[f.tier || 4]}
+                      </U.Badge>
+                      {slotLabel(f.slot) && (
+                        <U.Badge variant="outline">{slotLabel(f.slot)}</U.Badge>
+                      )}
                       <Status value={f.review} />
                       {sourceChanged(f) && (
                         <U.Badge variant="destructive">
@@ -2071,7 +2476,7 @@ export function App({
                     )}
                     <div className="flex flex-wrap justify-between items-center gap-3 mt-4">
                       <span className="text-p5 text-muted-foreground">
-                        {f.citations.length} evidence reference
+                        {f.citations.length} source reference
                         {f.citations.length === 1 ? "" : "s"} ·{" "}
                         {date(f.updatedAt)}
                       </span>
@@ -2092,11 +2497,11 @@ export function App({
               <U.Card>
                 {findings.length ? (
                   <Empty
-                    title="No findings match"
+                    title="No facts match"
                     description={
                       search
                         ? `Nothing matches “${search}”${filter === "all" ? "" : " in that review state"}.`
-                        : `No findings are ${labels[filter]?.toLowerCase() || "in that state"}${roleId === "all" ? "" : " for this role"}.`
+                        : `No facts are ${labels[filter]?.toLowerCase() || "in that state"}${roleId === "all" ? "" : " for this role"}.`
                     }
                     action={
                       <U.Button variant="outline" onClick={clearFilters}>
@@ -2106,8 +2511,8 @@ export function App({
                   />
                 ) : roleId !== "all" && orgHasFindings ? (
                   <Empty
-                    title="No findings for this role"
-                    description="Findings recorded for other roles or for the whole organisation are hidden by the role scope."
+                    title="No facts for this role"
+                    description="Facts recorded for other roles or for the whole organisation are hidden by the role scope."
                     action={
                       <U.Button
                         variant="outline"
@@ -2120,7 +2525,7 @@ export function App({
                 ) : (
                   <Empty
                     title="Evidence comes before the story"
-                    description="Add source material, then run research or record a finding yourself. Every factual claim needs an exact supporting passage."
+                    description="Add source material, then run research or record a fact yourself. Every factual claim needs an exact supporting passage."
                     action={
                       <U.Button
                         variant="outline"
@@ -2477,13 +2882,26 @@ export function App({
                 <p className="text-p5 text-muted-foreground">
                   {q.assignee ? `Assigned to ${q.assignee}` : "Unassigned"}
                 </p>
-                <U.Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setModal({ type: "question", item: q })}
-                >
-                  Respond or defer
-                </U.Button>
+                <div className="flex flex-wrap gap-2">
+                  {q.status === "answered" && q.answer.trim() && (
+                    <U.Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        setModal({ type: "question-fact", item: q })
+                      }
+                    >
+                      Turn the answer into a fact
+                    </U.Button>
+                  )}
+                  <U.Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setModal({ type: "question", item: q })}
+                  >
+                    Respond or defer
+                  </U.Button>
+                </div>
               </div>
             </U.CardContent>
           </U.Card>
@@ -2545,7 +2963,7 @@ export function App({
                   </div>
                   <h3 className="text-h6">{p.role.title}</h3>
                   <p className="text-p5 text-muted-foreground">
-                    {date(p.createdAt)} · {p.findings.length} findings ·{" "}
+                    {date(p.createdAt)} · {p.findings.length} facts ·{" "}
                     {p.sources.length} sources · Schema {p.schemaVersion}
                   </p>
                 </div>
@@ -2583,6 +3001,59 @@ export function App({
                   >
                     JSON
                   </U.Button>
+                  <U.Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      void run(
+                        () =>
+                          download(
+                            `/packs/${p.id}/docx`,
+                            `${org!.name}-research-r${p.revision}.docx`,
+                          ),
+                        "DOCX downloaded",
+                      )
+                    }
+                  >
+                    <U.IconDownload size={16} />
+                    Download DOCX
+                  </U.Button>
+                  <U.Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      void run(
+                        () =>
+                          download(
+                            `/packs/${p.id}/zip`,
+                            `${org!.name}-research-r${p.revision}.zip`,
+                          ),
+                        "Folder downloaded",
+                      )
+                    }
+                  >
+                    <U.IconDownload size={16} />
+                    Download folder (ZIP)
+                  </U.Button>
+                  {p.schemaVersion === "2.0.0" && (
+                    <U.Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        void run(
+                          () =>
+                            download(
+                              `/packs/${p.id}/confirm.md`,
+                              `${org!.name}-research-r${p.revision}-to-confirm.md`,
+                            ),
+                          "Confirmation list downloaded",
+                        )
+                      }
+                    >
+                      <U.IconDownload size={16} />
+                      For the organisation to confirm
+                    </U.Button>
+                  )}
                 </div>
               </div>
               <details className="mt-4">
@@ -2637,7 +3108,7 @@ export function App({
       {pageHeading(
         "Workspace",
         "Team & settings",
-        "Team access, research connections and research instructions. Access is managed independently from Employer Intelligence.",
+        "Team access, research connections and research instructions. Access is managed independently from the wider platform.",
       )}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <U.Card>
@@ -2971,7 +3442,7 @@ export function App({
                               findings.filter((f) => f.review === "accepted")
                                 .length
                             }{" "}
-                            accepted findings
+                            registered facts
                           </a>
                           <span aria-hidden="true">·</span>
                           <a
@@ -3045,6 +3516,7 @@ export function App({
           // change made meanwhile is rejected with 409 rather than overwritten.
           finding={data.findings.find((f) => f.id === evidence.id) || evidence}
           sources={data.sources}
+          canVerify={session?.role === "reviewer" || session?.role === "admin"}
           onClose={() => setEvidence(undefined)}
           onSave={async (v) => {
             await patch(`/findings/${evidence.id}`, {
@@ -3111,11 +3583,13 @@ export function App({
 function EvidencePanel({
   finding: f,
   sources,
+  canVerify,
   onClose,
   onSave,
 }: {
   finding: Finding;
   sources: Source[];
+  canVerify: boolean;
   onClose: () => void;
   onSave: (v: any) => Promise<void>;
 }) {
@@ -3123,13 +3597,40 @@ function EvidencePanel({
   const [kind, setKind] = useState(f.kind);
   const [status, setStatus] = useState(f.review);
   const [rationale, setRationale] = useState(f.rationale);
+  const [slot, setSlot] = useState<Slot>(f.slot || "none");
+  const [fields, setFields] = useState<FactFieldValues>(() =>
+    Object.fromEntries(
+      Object.entries(f.fields || {}).map(([key, value]) => [
+        key,
+        Array.isArray(value) ? value.map(String) : String(value ?? ""),
+      ]),
+    ),
+  );
+  const [parts, setParts] = useState<Part[]>(f.parts || []);
+  const [slotTouched, setSlotTouched] = useState(false);
+  const [partsTouched, setPartsTouched] = useState(false);
+  const [verified, setVerified] = useState(!!f.verified);
+  const [verificationNote, setVerificationNote] = useState(
+    f.verified?.note || "",
+  );
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const slotChanged = slotTouched && slot !== (f.slot || "none");
+  const partsChanged =
+    partsTouched && JSON.stringify(parts) !== JSON.stringify(f.parts || []);
+  const fieldsChanged =
+    JSON.stringify(normaliseFactFields(fields)) !== JSON.stringify(f.fields || {});
+  const tableSlot = !!slots.find((item) => item.slot === slot)?.table;
   const dirty =
-    claim !== f.claim ||
+    (!tableSlot && claim !== f.claim) ||
     kind !== f.kind ||
     status !== f.review ||
-    rationale !== f.rationale;
+    rationale !== f.rationale ||
+    slotChanged ||
+    partsChanged ||
+    (tableSlot && fieldsChanged) ||
+    verified !== !!f.verified ||
+    (verified && verificationNote !== (f.verified?.note || ""));
   const closeGuard = useFormCloseGuard({ dirty, busy, onClose });
   return (
     <U.Sheet
@@ -3140,10 +3641,10 @@ function EvidencePanel({
     >
       <U.SheetContent className="w-full sm:max-w-2xl overflow-y-auto">
         <U.SheetHeader>
-          <U.SheetTitle>Inspect the evidence</U.SheetTitle>
+          <U.SheetTitle>Inspect the fact</U.SheetTitle>
           <U.SheetDescription>
-            Acceptance means suitable for drafting. It does not mean the
-            organisation has approved it.
+            Registration means suitable for drafting. Readiness is not the
+            organisation&apos;s approval.
           </U.SheetDescription>
         </U.SheetHeader>
         <div className="space-y-6 py-6">
@@ -3153,25 +3654,58 @@ function EvidencePanel({
               <U.AlertDescription>
                 A newer capture no longer contains this exact quotation. Check
                 the passage against the new capture before saving a review; the
-                finding blocks readiness{" "}
+                fact blocks readiness{" "}
                 <WhatsThis term="readiness">{READINESS_HELP}</WhatsThis> until
                 it is reviewed again.
               </U.AlertDescription>
             </U.Alert>
           )}
-          <div className="space-y-2">
-            <U.Label htmlFor="review-claim">Finding</U.Label>
-            <AutoTextarea
-              id="review-claim"
-              rows={4}
-              value={claim}
-              autoFocus
-              onChange={(e) => {
-                setClaim(e.target.value);
-                setError("");
-              }}
+          {tableSlot ? (
+            <FactFields
+              slot={slot}
+              values={fields}
+              sources={sources.filter((source) => source.orgId === f.orgId)}
+              onChange={(value) => { setFields(value); setError(""); }}
             />
+          ) : (
+            <div className="space-y-2">
+              <U.Label htmlFor="review-claim">Fact</U.Label>
+              <AutoTextarea
+                id="review-claim"
+                rows={4}
+                value={claim}
+                autoFocus
+                onChange={(e) => {
+                  setClaim(e.target.value);
+                  setError("");
+                }}
+              />
+            </div>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <U.Badge variant="outline">
+              Tier {f.tier || 4} · {tierNames[f.tier || 4]}
+            </U.Badge>
+            <span className="text-p5 text-muted-foreground self-center">
+              {f.verified
+                ? "Derived from: verified"
+                : f.citations.length
+                  ? "Derived from: lowest tier of the cited sources"
+                  : "Derived from: no supporting citation, so it is illustrative and declared"}
+            </span>
           </div>
+          <FactPlacement
+            slot={slot}
+            parts={parts}
+            onSlotChange={(value) => {
+              setSlotTouched(true);
+              setSlot(value);
+            }}
+            onPartsChange={(value) => {
+              setPartsTouched(true);
+              setParts(value);
+            }}
+          />
           <Pick
             label="Classification"
             value={kind}
@@ -3225,7 +3759,7 @@ function EvidencePanel({
                       </details>
                     )}
                     <p className="text-p5 text-muted-foreground">
-                      Evidence basis:{" "}
+                      Source basis:{" "}
                       {s?.verification === "client-confirmed"
                         ? "Confirmed by the organisation"
                         : s?.verification === "public-source"
@@ -3266,23 +3800,90 @@ function EvidencePanel({
             }}
             options={[
               ["unreviewed", "Needs review"],
-              ["accepted", "Accept for drafting"],
+              ["accepted", "Register"],
               ["clarification", "Needs clarification"],
               ["rejected", "Exclude from the pack"],
             ]}
           />
+          {canVerify && (
+            <section className="rounded-xl border border-border p-4 space-y-3">
+              <div>
+                <h3 className="text-h6">Verified by the organisation</h3>
+                <p className="text-p5 text-muted-foreground">
+                  Use this only when the organisation has confirmed this fact.
+                  Verification makes it tier 1.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <U.Label htmlFor="verification-note">
+                  Verification note (optional)
+                </U.Label>
+                <AutoTextarea
+                  id="verification-note"
+                  value={verificationNote}
+                  onChange={(event) => setVerificationNote(event.target.value)}
+                />
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <U.Button
+                  type="button"
+                  variant={verified ? "secondary" : "outline"}
+                  onClick={() => setVerified(true)}
+                >
+                  Verified by the organisation
+                </U.Button>
+                {(verified || f.verified) && (
+                  <U.Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => {
+                      setVerified(false);
+                      setVerificationNote("");
+                    }}
+                  >
+                    Clear verification
+                  </U.Button>
+                )}
+              </div>
+              {f.verified && (
+                <p className="text-p5 text-muted-foreground">
+                  Verified by {f.verified.by} on {date(f.verified.at)}
+                </p>
+              )}
+            </section>
+          )}
           {error && (
             <U.Alert role="alert" variant="destructive">
               <U.AlertDescription>{error}</U.AlertDescription>
             </U.Alert>
           )}
           <U.Button
-            disabled={busy || !claim.trim()}
+            disabled={busy || (!tableSlot && !claim.trim()) || (tableSlot && !factFieldsClaim(slot, fields))}
             onClick={async () => {
               setBusy(true);
               setError("");
               try {
-                await onSave({ claim, kind, review: status, rationale });
+                await onSave({
+                  ...(!tableSlot ? { claim } : {}),
+                  kind,
+                  review: status,
+                  rationale,
+                  ...(slotChanged ? { slot } : {}),
+                  ...(partsChanged ? { parts } : {}),
+                  ...(tableSlot && fieldsChanged
+                    ? { fields: normaliseFactFields(fields) }
+                    : {}),
+                  ...(canVerify &&
+                  (verified !== !!f.verified ||
+                    (verified &&
+                      verificationNote !== (f.verified?.note || "")))
+                    ? {
+                        verified: verified
+                          ? { note: verificationNote.trim() || undefined }
+                          : null,
+                      }
+                    : {}),
+                });
               } catch (e) {
                 setError((e as Error).message);
               } finally {
@@ -3338,11 +3939,23 @@ function SourcePanel({
 }) {
   const [permission, setPermission] = useState(s.permission);
   const [caption, setCaption] = useState(s.caption || "");
+  const [folder, setFolder] = useState<string>(s.folder || "auto");
+  const [rights, setRights] = useState<string>(s.rights || "none");
+  const [folderTouched, setFolderTouched] = useState(false);
+  const [rightsTouched, setRightsTouched] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [image, setImage] = useState("");
   const [refresh, setRefresh] = useState<RefreshResult>();
-  const dirty = permission !== s.permission || caption !== (s.caption || "");
+  const folderChanged =
+    folderTouched && folder !== (s.folder || "auto");
+  const rightsChanged =
+    rightsTouched && rights !== (s.rights || "none");
+  const dirty =
+    permission !== s.permission ||
+    caption !== (s.caption || "") ||
+    folderChanged ||
+    rightsChanged;
   const closeGuard = useFormCloseGuard({ dirty, busy, onClose });
   const diff =
     refresh || (s.captureDiff ? { ...s.captureDiff, source: s } : undefined);
@@ -3408,6 +4021,27 @@ function SourcePanel({
               Download original
             </U.Button>
           )}
+          <div className="grid grid-cols-1 gap-3 rounded-xl bg-muted p-4 sm:grid-cols-2">
+            <div>
+              <p className="text-label-3">Section</p>
+              <p className="text-p4">{folderTitle(s.folder)}</p>
+            </div>
+            <div>
+              <p className="text-label-3">Export file name</p>
+              <p className="text-p4 break-all">
+                {s.exportName || "Not available"}
+              </p>
+            </div>
+            {s.providedBy && (
+              <div className="sm:col-span-2">
+                <p className="text-label-3">Provided by</p>
+                <p className="text-p4">
+                  {s.providedBy.name}
+                  {s.providedBy.jobTitle ? ` · ${s.providedBy.jobTitle}` : ""}
+                </p>
+              </div>
+            )}
+          </div>
           {s.kind === "web" && s.url && (
             <div className="space-y-3">
               <div className="flex flex-wrap items-center gap-2">
@@ -3446,7 +4080,7 @@ function SourcePanel({
                   <U.AlertDescription>
                     <p className="text-p4 font-medium">
                       {diff.changed
-                        ? `${refresh ? "The page changed." : "This capture differs from the one it refreshed."} ${diff.affectedFindingIds.length} finding${diff.affectedFindingIds.length === 1 ? "" : "s"} cite${diff.affectedFindingIds.length === 1 ? "s" : ""} passages that no longer appear and ${diff.affectedFindingIds.length === 1 ? "was" : "were"} flagged for re-review.`
+                        ? `${refresh ? "The page changed." : "This capture differs from the one it refreshed."} ${diff.affectedFindingIds.length} fact${diff.affectedFindingIds.length === 1 ? "" : "s"} cite${diff.affectedFindingIds.length === 1 ? "s" : ""} passages that no longer appear and ${diff.affectedFindingIds.length === 1 ? "was" : "were"} flagged for re-review.`
                         : refresh
                           ? "No text change since the previous capture. A new capture was recorded with today’s date."
                           : "No text change against the capture this one refreshed."}
@@ -3454,7 +4088,7 @@ function SourcePanel({
                     {refresh && (
                       <p className="text-p5 mt-1">
                         This capture is kept unchanged; existing quotations
-                        still refer to it. New findings should cite the new
+                        still refer to it. New facts should cite the new
                         capture.
                       </p>
                     )}
@@ -3512,6 +4146,35 @@ function SourcePanel({
             />
           </div>
           <Pick
+            label="Section"
+            value={folder}
+            onChange={(value) => {
+              setFolderTouched(true);
+              setFolder(value);
+              setError("");
+            }}
+            options={FOLDER_OPTIONS}
+          />
+          {(s.kind === "image" ||
+            s.kind === "film" ||
+            s.kind === "screenshot") && (
+            <Pick
+              label="Media rights"
+              value={rights}
+              onChange={(value) => {
+                setRightsTouched(true);
+                setRights(value);
+                setError("");
+              }}
+              options={[
+                ["none", "Not recorded"],
+                ["organisation-supplied", "Supplied by the organisation"],
+                ["press-kit", "Press kit"],
+                ["reference-only", "Reference only"],
+              ]}
+            />
+          )}
+          <Pick
             label="Usage permission"
             value={permission}
             onChange={(v) => {
@@ -3539,7 +4202,19 @@ function SourcePanel({
               setBusy(true);
               setError("");
               try {
-                await onSave({ permission, caption });
+                await onSave({
+                  permission,
+                  caption,
+                  ...(folderChanged
+                    ? { folder: folder === "auto" ? null : folder }
+                    : {}),
+                  ...(rightsChanged
+                    ? {
+                        rights:
+                          rights === "none" ? null : (rights as Rights),
+                      }
+                    : {}),
+                });
               } catch (e) {
                 setError((e as Error).message);
               } finally {

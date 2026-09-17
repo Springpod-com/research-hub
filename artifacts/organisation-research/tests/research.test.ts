@@ -57,6 +57,36 @@ it("retains one successful Max run when the second provider fails, excluding inv
         ],
         rationale: "Test",
       },
+      {
+        claim: "Keep this claim",
+        kind: "company",
+        citations: [
+          {
+            sourceId: source.id,
+            quote:
+              "Coordinators record quantity differences and prepare a handover for the next shift.",
+            locator: "Paragraph 1",
+          },
+        ],
+        rationale: "Test",
+        slot: "role.duty",
+        fields: { duty: "A duty", unknown: "not a column" },
+      },
+      {
+        claim: "Keep this finding without its fabricated source field",
+        kind: "company",
+        citations: [
+          {
+            sourceId: source.id,
+            quote:
+              "Coordinators record quantity differences and prepare a handover for the next shift.",
+            locator: "Paragraph 1",
+          },
+        ],
+        rationale: "Test",
+        slot: "role.advert",
+        fields: { title: "Coordinator", fileSourceId: "fabricated-source" },
+      },
     ],
     questions: [],
     activities: [],
@@ -89,6 +119,15 @@ it("retains one successful Max run when the second provider fails, excluding inv
     expect(result.findings.some((f) => f.claim === "Invented claim")).toBe(
       false,
     );
+    const retained = result.findings.find((f) => f.claim === "Keep this claim");
+    expect(retained?.slot).toBe("role.duty");
+    expect(retained?.fields).toBeUndefined();
+    const badReference = result.findings.find(
+      (f) =>
+        f.claim === "Keep this finding without its fabricated source field",
+    );
+    expect(badReference?.slot).toBe("role.advert");
+    expect(badReference?.fields).toBeUndefined();
     expect(result.jobs[0].errors.some((e) => e.includes("excluded"))).toBe(
       true,
     );

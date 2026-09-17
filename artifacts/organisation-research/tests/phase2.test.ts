@@ -45,6 +45,13 @@ beforeAll(async () => {
     publishedAt: "",
     retrievedAt: now(),
     runIds: [],
+    folder: "02-role",
+    tier: 2,
+    tierReason: "Public careers page",
+    rights: "reference-only",
+    transcriptSourceId: fixture.sources[0].id,
+    timecode: "00:00:30",
+    providedBy: { name: "Jordan Lee", jobTitle: "Careers manager" },
   };
   fixture.sources.push(webSource);
   fixture.findings.push({
@@ -288,6 +295,15 @@ describe("Source refresh", () => {
     expect(r.status).toBe(201);
     expect(r.body.changed).toBe(true);
     expect(r.body.source.supersedes).toBe(webSource.id);
+    expect(r.body.source).toMatchObject({
+      folder: webSource.folder,
+      tier: webSource.tier,
+      tierReason: webSource.tierReason,
+      rights: webSource.rights,
+      transcriptSourceId: webSource.transcriptSourceId,
+      timecode: webSource.timecode,
+      providedBy: webSource.providedBy,
+    });
     expect(r.body.added).toContain("New: apprenticeships open in March.");
     expect(r.body.removed).toContain(firstParagraph);
     const flagged = fixture.findings.find(
@@ -305,7 +321,7 @@ describe("Source refresh", () => {
       `/api/roles/${role().id}/readiness`,
     );
     expect(readiness.body.issues).toContain(
-      "Re-review findings whose source page changed since the quotation was captured.",
+      "Re-review facts whose source page changed since the quotation was captured.",
     );
     // Re-reviewing after the change clears the flag; the old quotation still
     // matches the immutable earlier capture, so the record stays valid.
@@ -317,7 +333,7 @@ describe("Source refresh", () => {
       (await request(app()).get(`/api/roles/${role().id}/readiness`)).body
         .issues,
     ).not.toContain(
-      "Re-review findings whose source page changed since the quotation was captured.",
+      "Re-review facts whose source page changed since the quotation was captured.",
     );
     expect(
       (await request(app()).post(`/api/sources/${webSource.id}/refresh`))
@@ -349,7 +365,7 @@ describe("Source refresh", () => {
 
 describe("Refresh integrity", () => {
   const recheck =
-    "Re-review findings whose source page changed since the quotation was captured.";
+    "Re-review facts whose source page changed since the quotation was captured.";
   const latest = async () => {
     const w = (await request(app()).get("/api/workspace")).body;
     return w.sources.find((s: Source) => s.kind === "web" && !s.supersededBy);
@@ -510,7 +526,7 @@ describe("Refresh transitions", () => {
       (await request(app()).get(`/api/roles/${role().id}/readiness`)).body
         .issues,
     ).toContain(
-      "Re-review findings whose source page changed since the quotation was captured.",
+      "Re-review facts whose source page changed since the quotation was captured.",
     );
   });
   it("reverts ready when source provenance changes or a research run records an error", async () => {

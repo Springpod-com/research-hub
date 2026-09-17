@@ -199,7 +199,7 @@ export function RunCard({
         <div className="space-y-1">
           {j.runs.map((r) => (
             <p key={r.id} className="text-p5 text-muted-foreground">
-              {r.model}: {r.status} · {r.findings} findings ·{" "}
+              {r.model}: {r.status} · {r.findings} facts ·{" "}
               {r.inputTokens + r.outputTokens} tokens
             </p>
           ))}

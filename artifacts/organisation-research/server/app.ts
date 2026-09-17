@@ -19,8 +19,11 @@ import {
   now,
   HttpError,
   orgInput,
+  orgPatchInput,
   roleInput,
+  rolePatchInput,
   findingInput,
+  citation,
   questionInput,
   activityInput,
   occupationInput,
@@ -38,6 +41,12 @@ import {
   captureDiff,
   captureLineage,
   hydrateDatasetMatch,
+  sourceView,
+  findingView,
+  sectionsView,
+  structuredFinding,
+  validateOrganisationReferences,
+  validateRoleReferences,
 } from "./domain.js";
 import {
   datasetSummaries,
@@ -45,7 +54,15 @@ import {
   search as searchOccupations,
   schemes as occupationSchemes,
 } from "./occupations.js";
-import type { Member, Source, Workspace } from "../shared/types.js";
+import type {
+  Finding,
+  Member,
+  ResearchJob,
+  SectionsResponse,
+  Source,
+  Workspace,
+} from "../shared/types.js";
+import { sections, slots } from "../shared/types.js";
 import {
   providers,
   providerAccess,
@@ -74,6 +91,12 @@ import {
 } from "./clerk-proxy.js";
 import { spawn } from "node:child_process";
 import path from "node:path";
+import {
+  confirmationMarkdown,
+  packDocx,
+  packFolderZipStream,
+  packZipName,
+} from "./export.js";
 export interface AppOptions {
   testMember?: Member;
   preview?: boolean;
@@ -84,6 +107,48 @@ const csv = (value: string | undefined) =>
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
+const folderField = z.enum([
+  "01-organisation",
+  "02-role",
+  "03-case-material",
+  "04-media",
+  "05-brand",
+  "06-organisation-supplied",
+]);
+const tierField = z.union([
+  z.literal(1),
+  z.literal(2),
+  z.literal(3),
+  z.literal(4),
+]);
+const rightsField = z.enum([
+  "organisation-supplied",
+  "press-kit",
+  "reference-only",
+]);
+const providedByField = z.object({
+  name: z.string().trim().min(1).max(200),
+  jobTitle: z.string().trim().max(200),
+});
+const sourceKnowledgeShape = {
+  folder: z.union([folderField, z.null()]).optional(),
+  tier: z.union([tierField, z.null()]).optional(),
+  tierReason: z.string().trim().max(2000).optional(),
+  rights: z.union([rightsField, z.null()]).optional(),
+  transcriptSourceId: z.union([z.string().uuid(), z.null()]).optional(),
+  timecode: z.union([z.string().trim().max(100), z.null()]).optional(),
+  providedBy: providedByField.nullable().optional(),
+};
+const requireTierReason = (data: {
+  tier?: 1 | 2 | 3 | 4 | null;
+  tierReason?: string;
+}) => {
+  if (data.tier !== undefined && data.tier !== null && !data.tierReason?.trim())
+    throw new HttpError(
+      422,
+      "Explain why this source has a manually assigned tier.",
+    );
+};
 /**
  * The initial administrator is identified by Clerk user ID
  * (BOOTSTRAP_ADMIN_IDS) or, because Clerk's development and production
@@ -256,6 +321,57 @@ export function createApp(store: Store, options: AppOptions = {}) {
         throw new HttpError(403, "Administrator access required.");
       return fn(w, current, db);
     });
+  const reviewFinding = (
+    w: Workspace,
+    m: Member,
+    finding: Finding,
+    changes: Partial<
+      Pick<Finding, "claim" | "kind" | "citations" | "review" | "rationale" | "slot" | "parts" | "fields">
+    >,
+    expectedVersion: unknown,
+    withoutVersion = false,
+  ) => {
+    const kind = changes.kind ?? finding.kind;
+    const citations = changes.citations ?? finding.citations;
+    const slot = changes.slot ?? finding.slot;
+    const fields = changes.fields ?? finding.fields;
+    structuredFinding(
+      w.sources,
+      finding.orgId,
+      slot,
+      fields,
+      citations,
+      w,
+    );
+    const inventedMeasurement =
+      slot === "case.measurement" &&
+      fields?.origin === "invented and declared";
+    if (!inventedMeasurement)
+      validateCitations(w.sources, finding.orgId, kind, citations);
+    if (withoutVersion) {
+      finding.version++;
+      finding.updatedAt = now();
+    } else {
+      touch(finding, expectedVersion);
+    }
+    const at = now();
+    finding.history.push({
+      at,
+      actor: m.userId,
+      claim: finding.claim,
+      review: finding.review,
+      rationale: finding.rationale,
+      verified: finding.verified
+        ? structuredClone(finding.verified)
+        : undefined,
+    });
+    Object.assign(finding, changes, {
+      reviewer: m.userId,
+      reviewedAt: at,
+    });
+    audit(w, m.userId, "Fact reviewed", finding.id);
+    return finding;
+  };
   app.get(
     "/api/session",
     handler(async (_req, res) =>
@@ -288,7 +404,8 @@ export function createApp(store: Store, options: AppOptions = {}) {
       res.json({
         ...w,
         roles: w.roles.map((r) => roleView(w, r)),
-        sources: w.sources.map(({ blob, ...s }) => s),
+        sources: w.sources.map(({ blob, ...s }) => sourceView(s)),
+        findings: w.findings.map((f) => findingView(w, f)),
         members:
           res.locals.member.role === "admin"
             ? w.members
@@ -340,12 +457,18 @@ export function createApp(store: Store, options: AppOptions = {}) {
   app.patch(
     "/api/organisations/:id",
     handler(async (req, res) => {
-      const data = orgInput.parse(req.body);
+      const data = orgPatchInput.parse(req.body);
       res.json(
         await mutate(req, res, (w, m) => {
           const item = get(w.organisations, String(req.params.id));
+          validateOrganisationReferences(w.sources, item.id, data.mayUse);
+          validateOrganisationReferences(w.sources, item.id, data.mustNotSay);
           touch(item, req.body.version);
-          Object.assign(item, data);
+          const { factChecker, brand, mayUse, mustNotSay, ...changes } = data;
+          Object.assign(item, changes);
+          for (const [key, value] of Object.entries({ factChecker, brand, mayUse, mustNotSay }))
+            if (value === null) delete (item as unknown as Record<string, unknown>)[key];
+            else if (value !== undefined) (item as unknown as Record<string, unknown>)[key] = value;
           audit(
             w,
             m.userId,
@@ -380,12 +503,17 @@ export function createApp(store: Store, options: AppOptions = {}) {
   app.patch(
     "/api/roles/:id",
     handler(async (req, res) => {
-      const data = roleInput.parse(req.body);
+      const data = rolePatchInput.parse(req.body);
       res.json(
         await mutate(req, res, (w, m) => {
           const role = get(w.roles, String(req.params.id));
+          validateRoleReferences(w.sources, role.orgId, data.interview);
           touch(role, req.body.version);
-          Object.assign(role, data);
+          const { standard, ncsUrl, professionalBody, interview, ...changes } = data;
+          Object.assign(role, changes);
+          for (const [key, value] of Object.entries({ standard, ncsUrl, professionalBody, interview }))
+            if (value === null) delete (role as unknown as Record<string, unknown>)[key];
+            else if (value !== undefined) (role as unknown as Record<string, unknown>)[key] = value;
           audit(w, m.userId, "Role updated", role.id);
           return role;
         }),
@@ -465,7 +593,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
           audit(
             w,
             m.userId,
-            `Role “${role.title}” deleted with ${deleted.findings} role-scoped findings, ${deleted.questions} questions, ${deleted.activities} activities and ${deleted.jobs} research runs; ${sourcesUnlinked} sources kept for the organisation`,
+            `Role “${role.title}” deleted with ${deleted.findings} role-scoped facts, ${deleted.questions} questions, ${deleted.activities} activities and ${deleted.jobs} research runs; ${sourcesUnlinked} sources kept for the organisation`,
             role.id,
           );
           return { id: role.id, deleted, sourcesUnlinked };
@@ -629,7 +757,16 @@ export function createApp(store: Store, options: AppOptions = {}) {
         .object({
           title: z.string().trim().min(1).max(200),
           text: z.string().min(1).max(100000),
-          kind: z.enum(["statement", "occupation", "document"]),
+          kind: z.enum([
+            "statement",
+            "occupation",
+            "document",
+            "film",
+            "advert",
+            "screenshot",
+            "standard",
+            "guidance",
+          ]),
           url: z.string().default(""),
           roleIds: z.array(z.string().uuid()).default([]),
           permission: z
@@ -645,8 +782,16 @@ export function createApp(store: Store, options: AppOptions = {}) {
             .default("user-supplied"),
           publishedAt: optionalText,
           locator: optionalText,
+          ...sourceKnowledgeShape,
+          folder: folderField.optional(),
+          tier: tierField.optional(),
+          rights: rightsField.optional(),
+          transcriptSourceId: z.string().uuid().optional(),
+          timecode: z.string().trim().max(100).optional(),
+          providedBy: providedByField.optional(),
         })
         .parse(req.body);
+      requireTierReason(data);
       if (data.url && !/^https?:\/\//.test(data.url))
         throw new HttpError(422, "Use a HTTP(S) source URL.");
       res.status(201).json(
@@ -663,7 +808,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
           };
           w.sources.push(source);
           audit(w, m.userId, "Source recorded", source.id);
-          return source;
+          return sourceView(source);
         }),
       );
     }),
@@ -672,8 +817,17 @@ export function createApp(store: Store, options: AppOptions = {}) {
     "/api/organisations/:id/web-source",
     handler(async (req, res) => {
       const data = z
-        .object({ url: z.string().url(), roleId: z.string().uuid().optional() })
+        .object({
+          url: z.string().url(),
+          roleId: z.string().uuid().optional(),
+          folder: folderField.optional(),
+          rights: rightsField.optional(),
+          providedBy: providedByField.optional(),
+          tier: tierField.optional(),
+          tierReason: z.string().trim().max(2000).optional(),
+        })
         .parse(req.body);
+      requireTierReason(data);
       roleInOrg(await store.read(), String(req.params.id), data.roleId);
       const page = await fetchPublic(data.url);
       const p = extractPage(page.html, page.url);
@@ -694,10 +848,15 @@ export function createApp(store: Store, options: AppOptions = {}) {
             retrievedAt: now(),
             locator: "Captured page excerpt",
             runIds: [],
+            folder: data.folder,
+            rights: data.rights,
+            providedBy: data.providedBy,
+            tier: data.tier,
+            tierReason: data.tierReason,
           };
           w.sources.push(source);
           audit(w, m.userId, "Public page captured", source.id);
-          return source;
+          return sourceView(source);
         }),
       );
     }),
@@ -736,6 +895,15 @@ export function createApp(store: Store, options: AppOptions = {}) {
             locator: "Captured page excerpt",
             runIds: [],
             supersedes: previous.id,
+            folder: previous.folder,
+            tier: previous.tier,
+            tierReason: previous.tierReason,
+            rights: previous.rights,
+            transcriptSourceId: previous.transcriptSourceId,
+            timecode: previous.timecode,
+            providedBy: previous.providedBy
+              ? { ...previous.providedBy }
+              : undefined,
           };
           // Findings cite whichever capture of this page they were made
           // against, so every earlier capture in the lineage is checked.
@@ -782,11 +950,11 @@ export function createApp(store: Store, options: AppOptions = {}) {
             w,
             m.userId,
             changed
-              ? `Source refreshed; ${affected.length} finding(s) need re-review`
+              ? `Source refreshed; ${affected.length} fact(s) need re-review`
               : "Source refreshed; no text change",
             source.id,
           );
-          return { source, ...source.captureDiff };
+          return { source: sourceView(source), ...source.captureDiff };
         }),
       );
     }),
@@ -804,6 +972,37 @@ export function createApp(store: Store, options: AppOptions = {}) {
       const orgId = String(req.params.id);
       const roleId = req.body.roleId || undefined;
       roleInOrg(await store.read(), orgId, roleId);
+      const uploadKnowledge = z
+        .object({
+          folder: z.preprocess(
+            (value) => value || undefined,
+            folderField.optional(),
+          ),
+          rights: z.preprocess(
+            (value) => value || undefined,
+            rightsField.optional(),
+          ),
+          tier: z.preprocess(
+            (value) =>
+              value === undefined || value === "" ? undefined : Number(value),
+            tierField.optional(),
+          ),
+          tierReason: z.preprocess(
+            (value) => value || undefined,
+            z.string().trim().max(2000).optional(),
+          ),
+          providedBy: z.preprocess((value) => {
+            if (!value) return undefined;
+            if (typeof value !== "string") return value;
+            try {
+              return JSON.parse(value);
+            } catch {
+              return value;
+            }
+          }, providedByField.optional()),
+        })
+        .parse(req.body);
+      requireTierReason(uploadKnowledge);
       const ext = path.extname(f.originalname).toLowerCase();
       const textTypes: Record<string, string> = {
         ".txt": "text/plain",
@@ -931,6 +1130,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
         mime,
         caption: String(req.body.caption || "").slice(0, 4000),
         runIds: [],
+        ...uploadKnowledge,
         error:
           !image && !content.trim()
             ? "No extractable text. Upload a text-readable document or record a passage manually."
@@ -939,11 +1139,16 @@ export function createApp(store: Store, options: AppOptions = {}) {
       await mutate(req, res, async (w, m, db) => {
         // The file itself is kept beside the workspace, not inside it, in the
         // same transaction as the source record.
-        await Store.putFile(db, source.id, f.buffer);
+        await Store.putFile(
+          db,
+          source.id,
+          f.buffer,
+          !!process.env.UPLOAD_SCAN_COMMAND,
+        );
         w.sources.push(source);
         audit(w, m.userId, "Source uploaded", source.id);
       });
-      res.status(201).json(source);
+      res.status(201).json(sourceView(source));
     }),
   );
   app.get(
@@ -973,6 +1178,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
           ]),
           caption: optionalText,
           roleIds: z.array(z.string().uuid()).default([]),
+          ...sourceKnowledgeShape,
         })
         .parse(req.body);
       res.json(
@@ -980,10 +1186,64 @@ export function createApp(store: Store, options: AppOptions = {}) {
           const s = get(w.sources, String(req.params.id));
           data.roleIds.forEach((id) => roleInOrg(w, s.orgId, id));
           touch(s, req.body.version);
-          Object.assign(s, data);
-          audit(w, m.userId, "Source permission or scope updated", s.id);
+          requireTierReason(data);
+          if (data.transcriptSourceId) {
+            const transcript = get(w.sources, data.transcriptSourceId);
+            if (transcript.orgId !== s.orgId)
+              throw new HttpError(422, "The transcript source must belong to this organisation.");
+          }
+          const effective = sourceView({
+            ...s,
+            tier: data.tier === null ? undefined : (data.tier ?? s.tier),
+            providedBy:
+              data.providedBy === null
+                ? undefined
+                : (data.providedBy ?? s.providedBy),
+          });
+          if (effective.tier !== 1) {
+            const organisation = get(w.organisations, s.orgId);
+            const lists = [
+              organisation.mayUse?.some((item) => item.sourceId === s.id)
+                ? "Names we may use"
+                : "",
+              organisation.mustNotSay?.some((item) => item.sourceId === s.id)
+                ? "Things we must not say"
+                : "",
+            ].filter(Boolean);
+            if (lists.length)
+              throw new HttpError(
+                422,
+                `${lists.join(" and ")} must cite tier-1 sources, so this source cannot be demoted.`,
+              );
+          }
+          const {
+            tier,
+            folder,
+            rights,
+            transcriptSourceId,
+            timecode,
+            providedBy,
+            ...changes
+          } = data;
+          Object.assign(s, changes);
+          if (tier === null) {
+            delete s.tier;
+            delete s.tierReason;
+          } else if (tier !== undefined) s.tier = tier;
+          if (folder === null) delete s.folder;
+          else if (folder !== undefined) s.folder = folder;
+          if (rights === null) delete s.rights;
+          else if (rights !== undefined) s.rights = rights;
+          if (transcriptSourceId === null) delete s.transcriptSourceId;
+          else if (transcriptSourceId !== undefined)
+            s.transcriptSourceId = transcriptSourceId;
+          if (timecode === null) delete s.timecode;
+          else if (timecode !== undefined) s.timecode = timecode;
+          if (providedBy === null) delete s.providedBy;
+          else if (providedBy !== undefined) s.providedBy = providedBy;
+          audit(w, m.userId, "Source details or scope updated", s.id);
           const { blob, ...clean } = s;
-          return clean;
+          return sourceView(clean);
         }),
       );
     }),
@@ -996,18 +1256,38 @@ export function createApp(store: Store, options: AppOptions = {}) {
         await mutate(req, res, (w, m) => {
           const orgId = String(req.params.id);
           roleInOrg(w, orgId, data.roleId);
-          validateCitations(w.sources, orgId, data.kind, data.citations);
-          const finding = {
+          const structured = structuredFinding(
+            w.sources,
+            orgId,
+            data.slot as Finding["slot"],
+            data.fields,
+            data.citations,
+            w,
+          );
+          const claim = structured.claim || data.claim;
+          if (!claim)
+            throw new HttpError(
+              422,
+              "A fact is required when structured fields are not supplied.",
+            );
+          const inventedMeasurement =
+            data.slot === "case.measurement" &&
+            data.fields?.origin === "invented and declared";
+          if (!inventedMeasurement)
+            validateCitations(w.sources, orgId, data.kind, data.citations);
+          const finding: Finding = {
             ...base(),
             ...data,
+            claim,
+            slot: data.slot as Finding["slot"],
             orgId,
             review: "unreviewed" as const,
             runIds: [],
             history: [],
           };
           w.findings.push(finding);
-          audit(w, m.userId, "Finding created", finding.id);
-          return finding;
+          audit(w, m.userId, "Fact created", finding.id);
+          return findingView(w, finding);
         }),
       );
     }),
@@ -1017,27 +1297,120 @@ export function createApp(store: Store, options: AppOptions = {}) {
     handler(async (req, res) => {
       const data = z
         .object({
-          claim: z.string().min(1).max(8000),
+          claim: z.string().min(1).max(8000).optional(),
           kind: z.enum(["company", "occupation", "proposal"]),
+          citations: z.array(citation).max(12).optional(),
           review,
           rationale: optionalText,
+          slot: z.enum(["none", ...slots.map((slot) => slot.slot)] as [string, ...string[]]).optional(),
+          parts: z
+            .array(z.enum(["day", "workflow", "matters", "call"]))
+            .max(4)
+            .refine((parts) => new Set(parts).size === parts.length, {
+              message: "Each chapter part may only be included once.",
+            })
+            .optional(),
+          fields: z.record(z.string(), z.unknown()).optional(),
+          verified: z.object({ note: z.string().trim().max(2000).optional() }).nullable().optional(),
         })
         .parse(req.body);
       res.json(
         await mutate(req, res, (w, m) => {
           const f = get(w.findings, String(req.params.id));
-          validateCitations(w.sources, f.orgId, data.kind, f.citations);
-          touch(f, req.body.version);
-          f.history.push({
-            at: now(),
-            actor: m.userId,
-            claim: f.claim,
-            review: f.review,
-            rationale: f.rationale,
-          });
-          Object.assign(f, data, { reviewer: m.userId, reviewedAt: now() });
-          audit(w, m.userId, "Finding reviewed", f.id);
-          return f;
+          if (
+            Object.prototype.hasOwnProperty.call(req.body, "verified") &&
+            !["reviewer", "admin"].includes(m.role)
+          )
+            throw new HttpError(403, "Only reviewers and administrators can verify a fact.");
+          const { verified, ...changes } = data;
+          const effectiveSlot = (changes.slot ?? f.slot) as Finding["slot"];
+          const effectiveFields = changes.fields ?? f.fields;
+          const effectiveCitations = changes.citations ?? f.citations;
+          const structured = structuredFinding(
+            w.sources,
+            f.orgId,
+            effectiveSlot,
+            effectiveFields,
+            effectiveCitations,
+            w,
+          );
+          if (structured.claim) changes.claim = structured.claim;
+          const substantiveChange =
+            changes.claim !== f.claim ||
+            changes.kind !== f.kind ||
+            (changes.citations !== undefined &&
+              JSON.stringify(changes.citations) !==
+                JSON.stringify(f.citations)) ||
+            (changes.fields !== undefined &&
+              JSON.stringify(changes.fields) !== JSON.stringify(f.fields)) ||
+            (changes.slot !== undefined &&
+              changes.slot !== (f.slot || "none"));
+          reviewFinding(
+            w,
+            m,
+            f,
+            changes as Partial<
+              Pick<
+                Finding,
+                | "claim"
+                | "kind"
+                | "citations"
+                | "review"
+                | "rationale"
+                | "slot"
+                | "parts"
+                | "fields"
+              >
+            >,
+            req.body.version,
+          );
+          if (verified === null) delete f.verified;
+          else if (verified !== undefined)
+            f.verified = { ...verified, by: m.name, at: now() };
+          else if (substantiveChange) delete f.verified;
+          return findingView(w, f);
+        }),
+      );
+    }),
+  );
+  app.post(
+    "/api/findings/bulk-review",
+    handler(async (req, res) => {
+      const data = z
+        .object({
+          ids: z
+            .array(z.string().uuid())
+            .min(1)
+            .max(100)
+            .refine((ids) => new Set(ids).size === ids.length, {
+              message: "Each fact may only be included once.",
+            }),
+          review,
+          rationale: z.string().trim().max(20000).optional(),
+        })
+        .parse(req.body);
+      res.json(
+        await mutate(req, res, (w, m) => {
+          // Resolve every id before changing anything. The transaction also
+          // guarantees that a failure leaves every fact untouched.
+          const findings = data.ids.map((id) => get(w.findings, id));
+          for (const finding of findings)
+            reviewFinding(
+              w,
+              m,
+              finding,
+              {
+                review: data.review,
+                ...(data.rationale === undefined
+                  ? {}
+                  : { rationale: data.rationale }),
+              },
+              undefined,
+              true,
+            );
+          return {
+            findings: findings.map((finding) => findingView(w, finding)),
+          };
         }),
       );
     }),
@@ -1096,6 +1469,73 @@ export function createApp(store: Store, options: AppOptions = {}) {
     }),
   );
   app.post(
+    "/api/questions/:id/fact",
+    handler(async (req, res) => {
+      const data = z.object({
+        slot: z.enum(["none", ...slots.map((slot) => slot.slot)] as [string, ...string[]]),
+        parts: z.array(z.enum(["day", "workflow", "matters", "call"])).max(4).default([]),
+        claim: z.string().trim().min(1).max(8000).optional(),
+      }).parse(req.body);
+      res.status(201).json(
+        await mutate(req, res, (w, m) => {
+          const question = get(w.questions, String(req.params.id));
+          if (question.status !== "answered" || !question.answer.trim())
+            throw new HttpError(422, "Only an answered question with a recorded answer can become a fact.");
+          const source: Source = {
+            ...base(),
+            orgId: question.orgId,
+            roleIds: question.roleId ? [question.roleId] : [],
+            title: `Answer to question: ${question.text}`.slice(0, 200),
+            kind: "statement",
+            folder: "06-organisation-supplied",
+            url: "",
+            text: question.answer,
+            locator: `Answer to question ${question.id}`,
+            permission: "research-only",
+            verification: "client-confirmed",
+            suppliedBy: m.name,
+            providedBy: question.answeredBy
+              ? { name: question.answeredBy, jobTitle: "" }
+              : undefined,
+            publishedAt: "",
+            retrievedAt: now(),
+            runIds: [],
+          };
+          const finding = {
+            ...base(),
+            orgId: question.orgId,
+            roleId: question.roleId,
+            kind: "company" as const,
+            claim: data.claim || question.answer,
+            citations: [{ sourceId: source.id, quote: question.answer, locator: source.locator }],
+            rationale: `Recorded from the organisation's answer to question ${question.id}.`,
+            review: "unreviewed" as const,
+            slot: data.slot as Finding["slot"],
+            parts: data.parts,
+            runIds: [],
+            history: [],
+          };
+          w.sources.push(source);
+          w.findings.push(finding);
+          audit(w, m.userId, "Question answer converted to fact", finding.id);
+          return { source: sourceView(source), finding: findingView(w, finding) };
+        }),
+      );
+    }),
+  );
+  app.get(
+    "/api/orgs/:orgId/sections",
+    handler(async (req, res) => {
+      const query = z.object({ roleId: z.string().uuid().optional() }).parse(req.query);
+      const response: SectionsResponse = sectionsView(
+        await store.read(),
+        String(req.params.orgId),
+        query.roleId,
+      );
+      res.json(response);
+    }),
+  );
+  app.post(
     "/api/organisations/:id/activities",
     handler(async (req, res) => {
       const data = activityInput.parse(req.body);
@@ -1106,7 +1546,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
           for (const id of data.findingIds) {
             const f = get(w.findings, id);
             if (f.orgId !== orgId || (f.roleId && f.roleId !== data.roleId))
-              throw new HttpError(422, "Finding is outside this role.");
+              throw new HttpError(422, "Fact is outside this role.");
           }
           const a = {
             ...base(),
@@ -1182,6 +1622,55 @@ export function createApp(store: Store, options: AppOptions = {}) {
     }),
   );
   app.get(
+    "/api/packs/:id/docx",
+    handler(async (req, res) => {
+      const pack = get(await store.packs(), String(req.params.id));
+      res.setHeader("Cache-Control", "private, no-store");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${packZipName(pack).replace(/\.zip$/, ".docx")}"`,
+      );
+      res
+        .type("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        .send(await packDocx(pack));
+    }),
+  );
+  app.get(
+    "/api/packs/:id/zip",
+    handler(async (req, res) => {
+      const pack = get(await store.packs(), String(req.params.id));
+      res.setHeader("Cache-Control", "private, no-store");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${packZipName(pack)}"`,
+      );
+      res.type("application/zip");
+      const stream = await packFolderZipStream(pack, store);
+      stream.on("error", () => {
+        if (!res.headersSent) res.status(500);
+        res.end();
+      });
+      stream.pipe(res);
+    }),
+  );
+  app.get(
+    "/api/packs/:id/confirm.md",
+    handler(async (req, res) => {
+      const pack = get(await store.packs(), String(req.params.id));
+      if (pack.schemaVersion !== "2.0.0")
+        throw new HttpError(
+          404,
+          "The confirmation page is not available for schema 1.0.0 packs.",
+        );
+      res.setHeader("Cache-Control", "private, no-store");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="for-organisation-to-confirm-r${pack.revision}.md"`,
+      );
+      res.type("text/markdown").send(confirmationMarkdown(pack));
+    }),
+  );
+  app.get(
     "/api/packs/:id/:format",
     handler(async (req, res) => {
       const p = get(await store.packs(), String(req.params.id));
@@ -1203,17 +1692,31 @@ export function createApp(store: Store, options: AppOptions = {}) {
         .object({
           roleId: z.string().uuid().optional(),
           tier: z.enum(["economy", "power", "max"]),
+          sections: z.array(z.enum(sections.map((section) => section.section) as [string, ...string[]])).max(6).optional(),
+          sourceIds: z.array(z.string().uuid()).max(16).optional(),
         })
         .parse(req.body);
-      if (!providers(await store.read())[data.tier])
-        throw new HttpError(
-          503,
-          "The selected research tier is not configured. Check the provider keys and models under Research connections.",
-        );
       res.status(202).json(
         await mutate(req, res, (w, m) => {
           const orgId = String(req.params.id);
           roleInOrg(w, orgId, data.roleId);
+          if (data.sourceIds)
+            for (const id of data.sourceIds) {
+              const source = w.sources.find((item) => item.id === id);
+              if (
+                !source ||
+                source.orgId !== orgId ||
+                (data.roleId && source.roleIds.length && !source.roleIds.includes(data.roleId)) ||
+                !source.text.trim() ||
+                !!source.error
+              )
+                throw new HttpError(422, "Every selected source must be readable and belong to this organisation and role.");
+            }
+          if (!providers(w)[data.tier])
+            throw new HttpError(
+              503,
+              "The selected research tier is not configured. Check the provider keys and models under Research connections.",
+            );
           const active = w.jobs.find(
             (j) =>
               j.orgId === orgId &&
@@ -1221,9 +1724,10 @@ export function createApp(store: Store, options: AppOptions = {}) {
               ["queued", "researching"].includes(j.status),
           );
           if (active) return active;
-          const job = {
+          const job: ResearchJob = {
             ...base(),
             ...data,
+            sections: data.sections as ResearchJob["sections"],
             orgId,
             status: "queued" as const,
             stage: "Waiting to research",

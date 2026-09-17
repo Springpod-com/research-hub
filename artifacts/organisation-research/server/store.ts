@@ -49,7 +49,8 @@ export class Store {
       // Uploaded files, one row per source. They are kept out of the
       // workspace document so that reading or saving the workspace never
       // carries every upload along (two documents made it 8 MB).
-      "CREATE TABLE IF NOT EXISTS research_files (source_id text PRIMARY KEY, data bytea NOT NULL)",
+      "CREATE TABLE IF NOT EXISTS research_files (source_id text PRIMARY KEY, data bytea NOT NULL, scan_clean boolean NOT NULL DEFAULT false)",
+      "ALTER TABLE research_files ADD COLUMN IF NOT EXISTS scan_clean boolean NOT NULL DEFAULT false",
     ])
       await this.db.query(statement);
     await this.db.query(
@@ -103,11 +104,21 @@ export class Store {
     ).rows[0];
     return row ? Buffer.from(row.data) : undefined;
   }
+  /** Uploaded bytes may enter an export only with a recorded clean scan. */
+  async cleanFile(sourceId: string): Promise<Buffer | undefined> {
+    const row = (
+      await this.db.query(
+        "SELECT data FROM research_files WHERE source_id=$1 AND scan_clean=true",
+        [sourceId],
+      )
+    ).rows[0];
+    return row ? Buffer.from(row.data) : undefined;
+  }
   /** Stores an uploaded file; call inside `transact` with its `db`. */
-  static putFile(db: SQL, sourceId: string, data: Buffer) {
+  static putFile(db: SQL, sourceId: string, data: Buffer, scanClean = false) {
     return db.query(
-      "INSERT INTO research_files(source_id,data) VALUES($1,$2) ON CONFLICT (source_id) DO UPDATE SET data=EXCLUDED.data",
-      [sourceId, data],
+      "INSERT INTO research_files(source_id,data,scan_clean) VALUES($1,$2,$3) ON CONFLICT (source_id) DO UPDATE SET data=EXCLUDED.data,scan_clean=EXCLUDED.scan_clean",
+      [sourceId, data, scanClean],
     );
   }
   async transact<T>(fn: (w: Workspace, db: SQL) => Promise<T> | T): Promise<T> {

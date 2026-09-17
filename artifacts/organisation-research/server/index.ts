@@ -19,7 +19,7 @@ if (
   process.env.DATABASE_CONFIRMED_STANDALONE !== "true"
 )
   throw new Error(
-    "Confirm this is a new standalone database with DATABASE_CONFIRMED_STANDALONE=true. Never use Employer Intelligence credentials.",
+    "Confirm this is a new standalone database with DATABASE_CONFIRMED_STANDALONE=true. Never use Organisation Intelligence credentials.",
   );
 const store = await Store.open({
   url: process.env.DATABASE_URL,

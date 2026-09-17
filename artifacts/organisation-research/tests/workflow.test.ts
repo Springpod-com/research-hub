@@ -1,6 +1,6 @@
 import { beforeAll, afterAll, describe, it, expect } from "vitest";
 import request from "supertest";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +9,17 @@ import { createApp } from "../server/app.js";
 import { sampleWorkspace, reviewer } from "./fixtures.js";
 import { publicAddress, extractPage } from "../server/retrieval.js";
 import type { Workspace } from "../shared/types.js";
+import type { PackV1 } from "../shared/types.js";
+import {
+  base,
+  findingView,
+  makePack,
+  packMarkdown,
+  roleFingerprint,
+  reviewStateOf,
+  sectionsView,
+  sourceView,
+} from "../server/domain.js";
 let store: Store;
 let fixture: Workspace;
 beforeAll(async () => {
@@ -93,6 +104,60 @@ describe("Evidence and immutable pack workflow", () => {
     expect(wrongWords.status).toBe(422);
     expect(wrongWords.body.error).toContain("was not found in");
   });
+  it("validates replacement citations and invented measurement citations", async () => {
+    const current = (await request(app()).get("/api/workspace")).body;
+    const finding = current.findings.find(
+      (item: { id: string }) => item.id === fixture.findings[0].id,
+    );
+    const foreign = {
+      ...fixture.sources[0],
+      ...base(),
+      orgId: fixture.organisations[1].id,
+      roleIds: [],
+    };
+    await store.transact((w) => {
+      w.sources.push(foreign);
+    });
+    const foreignCitation = await request(app())
+      .patch(`/api/findings/${finding.id}`)
+      .send({
+        ...finding,
+        citations: [
+          {
+            sourceId: foreign.id,
+            quote: foreign.text,
+            locator: foreign.locator,
+          },
+        ],
+      });
+    expect(foreignCitation.status).toBe(422);
+
+    const created = await request(app())
+      .post(`/api/organisations/${fixture.organisations[0].id}/findings`)
+      .send({
+        claim: "42 units",
+        kind: "proposal",
+        citations: [],
+        rationale: "Invented and declared.",
+        slot: "case.measurement",
+        fields: { reading: "42", origin: "invented and declared" },
+      });
+    const cited = await request(app())
+      .patch(`/api/findings/${created.body.id}`)
+      .send({
+        ...created.body,
+        citations: fixture.findings[0].citations,
+      });
+    expect(cited.status).toBe(422);
+    expect(cited.body.error).toContain("must not have citations");
+    expect(
+      (
+        await request(app())
+          .patch(`/api/findings/${created.body.id}`)
+          .send({ ...created.body, review: "rejected" })
+      ).status,
+    ).toBe(200);
+  });
   it("explains why a source without captured text cannot support a fact", async () => {
     const f = fixture.findings[0];
     const template = fixture.sources.find(
@@ -104,6 +169,7 @@ describe("Evidence and immutable pack workflow", () => {
       kind: "image" as const,
       title: "Warehouse photo",
       text: "",
+      rights: "reference-only" as const,
     };
     await store.transact((w) => {
       w.sources.push(photo);
@@ -165,6 +231,171 @@ describe("Evidence and immutable pack workflow", () => {
       ).status,
     ).toBe(200);
   });
+  it("bulk-reviews facts atomically through the individual review path", async () => {
+    const orgId = fixture.organisations[0].id;
+    const create = (claim: string) =>
+      request(app())
+        .post(`/api/organisations/${orgId}/findings`)
+        .send({ claim, kind: "proposal", citations: [], rationale: "Initial" });
+    const first = await create("Bulk review proposal one");
+    const second = await create("Bulk review proposal two");
+    const ids = [first.body.id, second.body.id];
+    const reviewed = await request(app())
+      .post("/api/findings/bulk-review")
+      .send({ ids, review: "accepted", rationale: "Reviewed together" });
+    expect(reviewed.status).toBe(200);
+    expect(reviewed.body.findings).toHaveLength(2);
+    expect(reviewed.body.findings[0]).toMatchObject({
+      review: "accepted",
+      rationale: "Reviewed together",
+      tier: 4,
+      slot: "none",
+      parts: [],
+    });
+    expect(reviewed.body.findings[0].history).toHaveLength(1);
+    const version = reviewed.body.findings[0].version;
+    const failed = await request(app())
+      .post("/api/findings/bulk-review")
+      .send({
+        ids: [ids[0], randomUUID()],
+        review: "clarification",
+      });
+    expect(failed.status).toBe(404);
+    const unchanged = (await request(app()).get("/api/workspace")).body.findings
+      .find((finding: { id: string }) => finding.id === ids[0]);
+    expect(unchanged.version).toBe(version);
+    expect(unchanged.review).toBe("accepted");
+    expect(
+      (
+        await request(app())
+          .post("/api/findings/bulk-review")
+          .send({ ids, review: "rejected" })
+      ).status,
+    ).toBe(200);
+  });
+  it("creates a new source kind with knowledge-base metadata", async () => {
+    const created = await request(app())
+      .post(`/api/organisations/${fixture.organisations[0].id}/sources`)
+      .send({
+        title: "Approved induction film",
+        text: "The induction film explains the shift handover.",
+        kind: "film",
+        roleIds: [fixture.roles[0].id],
+        suppliedBy: reviewer.name,
+        folder: "03-case-material",
+        rights: "organisation-supplied",
+        providedBy: { name: "Jamie Smith", jobTitle: "Operations manager" },
+        transcriptSourceId: fixture.sources[0].id,
+        timecode: "00:02:10",
+        tier: 1,
+        tierReason: "Supplied directly by the organisation.",
+      });
+    expect(created.status).toBe(201);
+    expect(created.body).toMatchObject({
+      kind: "film",
+      folder: "03-case-material",
+      rights: "organisation-supplied",
+      tier: 1,
+      tierReason: "Supplied directly by the organisation.",
+      providedBy: { name: "Jamie Smith", jobTitle: "Operations manager" },
+    });
+    const cleared = await request(app())
+      .patch(`/api/sources/${created.body.id}`)
+      .send({
+        version: created.body.version,
+        permission: created.body.permission,
+        caption: created.body.caption || "",
+        roleIds: created.body.roleIds,
+        folder: null,
+        rights: null,
+        providedBy: null,
+        transcriptSourceId: null,
+        timecode: null,
+      });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.folder).toBe("04-media");
+    expect(cleared.body.rights).toBeUndefined();
+    expect(cleared.body.providedBy).toBeUndefined();
+    expect(cleared.body.transcriptSourceId).toBeUndefined();
+    expect(cleared.body.timecode).toBeUndefined();
+  });
+  it("rejects demoting a source cited by an organisation list", async () => {
+    const citedSource = {
+      ...fixture.sources[0],
+      ...base(),
+      tier: 1 as const,
+      tierReason: "Confirmed directly by the organisation.",
+    };
+    await store.transact((w) => {
+      w.sources.push(citedSource);
+      w.organisations[0].mayUse = [
+        { text: "Northstar", sourceId: citedSource.id },
+      ];
+    });
+    const demoted = await request(app())
+      .patch(`/api/sources/${citedSource.id}`)
+      .send({
+        version: citedSource.version,
+        permission: citedSource.permission,
+        caption: "",
+        roleIds: citedSource.roleIds,
+        tier: 2,
+        tierReason: "Public material.",
+      });
+    expect(demoted.status).toBe(422);
+    expect(demoted.body.error).toContain("Names we may use");
+    await store.transact((w) => {
+      delete w.organisations[0].mayUse;
+      w.sources = w.sources.filter((source) => source.id !== citedSource.id);
+    });
+  });
+  it("clears verification when a researcher changes verified fact content", async () => {
+    const created = await request(app())
+      .post(`/api/organisations/${fixture.organisations[0].id}/findings`)
+      .send({
+        claim: "A verified proposal",
+        kind: "proposal",
+        citations: [],
+        rationale: "",
+      });
+    const verified = await request(app())
+      .patch(`/api/findings/${created.body.id}`)
+      .send({ ...created.body, verified: { note: "Confirmed" } });
+    expect(verified.body.verified.by).toBe(reviewer.name);
+    const researcher = createApp(store, {
+      testMember: { ...reviewer, userId: "user_researcher", role: "researcher" },
+    });
+    const changed = await request(researcher)
+      .patch(`/api/findings/${created.body.id}`)
+      .send({
+        version: verified.body.version,
+        claim: "Changed by a researcher",
+        kind: verified.body.kind,
+        citations: verified.body.citations,
+        review: verified.body.review,
+        rationale: verified.body.rationale,
+        slot: verified.body.slot,
+      });
+    expect(changed.status).toBe(200);
+    expect(changed.body.verified).toBeUndefined();
+    expect(changed.body.tier).toBe(4);
+    expect(changed.body.history.at(-1).verified.note).toBe("Confirmed");
+    const reverified = await request(app())
+      .patch(`/api/findings/${created.body.id}`)
+      .send({
+        ...changed.body,
+        claim: "Changed and re-verified by a reviewer",
+        verified: { note: "Reconfirmed" },
+      });
+    expect(reverified.body.verified.note).toBe("Reconfirmed");
+    expect(
+      (
+        await request(app())
+          .patch(`/api/findings/${created.body.id}`)
+          .send({ ...reverified.body, review: "rejected", verified: null })
+      ).status,
+    ).toBe(200);
+  });
   it("requires provenance for answers and blocks on unresolved material questions", async () => {
     const q = await request(app())
       .post(`/api/organisations/${fixture.roles[0].orgId}/questions`)
@@ -222,6 +453,17 @@ describe("Evidence and immutable pack workflow", () => {
     ).toBe(403);
   });
   it("exports identical immutable snapshots with increasing revisions", async () => {
+    await store.transact((w) => {
+      for (const source of w.sources.filter(
+        (item) =>
+          item.orgId === fixture.organisations[0].id &&
+          ["image", "film"].includes(item.kind),
+      )) {
+        source.rights = "reference-only";
+        if (source.kind === "film" && !source.transcriptSourceId)
+          source.caption = "No transcript is available for this film.";
+      }
+    });
     const path = `/api/roles/${fixture.roles[0].id}/packs`;
     const markReady = async () => {
       const role = (await request(app()).get("/api/workspace")).body.roles[0];
@@ -250,6 +492,9 @@ describe("Evidence and immutable pack workflow", () => {
     expect(second.body.revision).toBe(first.body.revision + 1);
     const json = await request(app()).get(`/api/packs/${first.body.id}/json`);
     const md = await request(app()).get(`/api/packs/${first.body.id}/md`);
+    const zip = await request(app()).get(`/api/packs/${first.body.id}/zip`);
+    expect(zip.status).toBe(200);
+    expect(zip.headers["content-type"]).toContain("application/zip");
     expect(json.body.organisation.summary).toBe(org.summary);
     const embedded = md.text.split("```json\n")[1].split("\n```")[0];
     expect(JSON.parse(embedded)).toEqual(json.body);
@@ -442,6 +687,112 @@ describe("Evidence and immutable pack workflow", () => {
       if (previous === undefined) delete process.env.UPLOAD_SCAN_COMMAND;
       else process.env.UPLOAD_SCAN_COMMAND = previous;
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+describe("Knowledge-base derived views and packs", () => {
+  it("derives source names, folders and tiers and reports section gaps", () => {
+    const w = sampleWorkspace();
+    w.findings[0].slot = "role.duty";
+    const source = sourceView(w.sources[0]);
+    expect(source.folder).toBe("01-organisation");
+    expect(source.tier).toBe(2);
+    expect(source.exportName).toMatch(
+      /^\d{4}-\d{2}-\d{2}_team_sample-role-brief-fictional\.txt$/,
+    );
+    expect(findingView(w, w.findings[0])).toMatchObject({
+      slot: "role.duty",
+      parts: [],
+      tier: 2,
+    });
+    const view = sectionsView(w, w.organisations[0].id, w.roles[0].id);
+    const role = view.sections.find((section) => section.section === "role")!;
+    expect(role.slots.find((slot) => slot.slot === "role.duty")?.filled).toBe(
+      true,
+    );
+    expect(view.missing).not.toContain("The role: Duties");
+    expect(view.missing).toContain("The role: Apprenticeship standard");
+  });
+
+  it("builds a 2.0.0 register and still renders a stored 1.0.0 pack", () => {
+    const w = sampleWorkspace();
+    w.findings[0].slot = "role.duty";
+    w.findings[0].parts = ["day", "day"];
+    const pack = makePack(
+      w,
+      w.organisations[0].id,
+      w.roles[0].id,
+      reviewer.userId,
+      "draft",
+      1,
+    );
+    expect(pack.schemaVersion).toBe("2.0.0");
+    if (pack.schemaVersion !== "2.0.0") throw new Error("Expected PackV2");
+    expect(pack.employerApproval).toBe(false);
+    expect(pack.register[0]).toMatchObject({
+      n: 1,
+      slot: "role.duty",
+      tier: 2,
+      parts: ["day"],
+    });
+    expect(pack.toConfirm).toHaveLength(1);
+    const schema = JSON.parse(
+      readFileSync(
+        path.join(process.cwd(), "docs/research-pack-v2.schema.json"),
+        "utf8",
+      ),
+    );
+    const sectionKeys = Object.keys(
+      schema.properties.sections.items.properties,
+    ).sort();
+    expect(Object.keys(pack.sections[0]).sort()).toEqual(sectionKeys);
+    expect(pack.sections[0]).not.toHaveProperty("roleScoped");
+    const {
+      header: _header,
+      tiers: _tiers,
+      sections: _sections,
+      register: _register,
+      toConfirm: _toConfirm,
+      ...basePack
+    } = pack;
+    const legacy = { ...basePack, schemaVersion: "1.0.0" } as PackV1;
+    expect(packMarkdown(legacy)).toContain("Schema 1.0.0");
+  });
+  it("fingerprints every new pack and readiness input", () => {
+    const mutations: ((w: Workspace) => void)[] = [
+      (w) => {
+        w.organisations[0].factChecker = {
+          name: "Pat Jones",
+          jobTitle: "Fact checker",
+        };
+      },
+      (w) => {
+        Object.assign(w.findings[0], {
+          slot: "role.duty",
+          parts: ["day"],
+          fields: { duty: "Check deliveries" },
+          verified: { by: "Pat Jones", at: new Date().toISOString() },
+        });
+      },
+      (w) => {
+        Object.assign(w.sources[0], {
+          folder: "03-case-material",
+          tier: 1,
+          tierReason: "Confirmed",
+          rights: "organisation-supplied",
+          transcriptSourceId: randomUUID(),
+          timecode: "00:01:20",
+          providedBy: { name: "Pat Jones", jobTitle: "Manager" },
+        });
+      },
+    ];
+    for (const mutate of mutations) {
+      const w = sampleWorkspace();
+      const role = w.roles[0];
+      role.reviewState = "ready";
+      role.readyFingerprint = roleFingerprint(w, role);
+      mutate(w);
+      expect(reviewStateOf(w, role)).toEqual({ state: "draft", changed: true });
     }
   });
 });

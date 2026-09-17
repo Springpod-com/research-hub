@@ -1,10 +1,13 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type {
   Organisation,
   ResearchJob,
   Role,
+  Section,
+  SectionsResponse,
   Source,
 } from "../../shared/types";
+import { api } from "../api";
 import * as U from "../ui";
 import { useFormCloseGuard } from "./form-close-guard";
 import {
@@ -29,7 +32,7 @@ const TIERS: { id: Tier; description: string }[] = [
   {
     id: "max",
     description:
-      "Two independent analyses of the same sources (Claude and OpenAI) so findings can be cross-checked. The slowest and most expensive.",
+      "Two independent analyses of the same sources (Claude and OpenAI) so facts can be cross-checked. The slowest and most expensive.",
   },
 ];
 const REMEMBERED = "organisation-research.tier";
@@ -58,11 +61,16 @@ export function ResearchDialog({
   roles: Role[];
   jobs: ResearchJob[];
   /** The organisation's readable sources (text captured, no error). */
-  sources: Pick<Source, "roleIds">[];
+  sources: Pick<Source, "id" | "roleIds" | "title" | "folder" | "retrievedAt">[];
   tiers: Record<string, boolean>;
   initialRoleId?: string;
   onClose: () => void;
-  onStart: (tier: Tier, roleId?: string) => Promise<void>;
+  onStart: (
+    tier: Tier,
+    roleId: string | undefined,
+    sections?: Section[],
+    sourceIds?: string[],
+  ) => Promise<void>;
 }) {
   const [tier, setTier] = useState<Tier>(() => {
     const remembered = rememberedTier();
@@ -74,17 +82,72 @@ export function ResearchDialog({
   const [scope, setScope] = useState(initialRoleId || ORG_SCOPE);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [sectionsError, setSectionsError] = useState("");
+  const [sectionData, setSectionData] = useState<SectionsResponse>();
+  const [chosenSections, setChosenSections] = useState<Section[]>([]);
+  const [sourceIds, setSourceIds] = useState<string[]>([]);
   const [initial] = useState({ tier, scope });
-  const dirty = tier !== initial.tier || scope !== initial.scope;
+  const dirty =
+    tier !== initial.tier ||
+    scope !== initial.scope ||
+    !!chosenSections.length ||
+    !!sourceIds.length;
   const closeGuard = useFormCloseGuard({ dirty, busy, onClose });
   const roleId = scope === ORG_SCOPE ? undefined : scope;
+  useEffect(() => {
+    let live = true;
+    setSectionData(undefined);
+    setSectionsError("");
+    setChosenSections([]);
+    setSourceIds([]);
+    api<SectionsResponse>(
+      `/orgs/${org.id}/sections${roleId ? `?roleId=${encodeURIComponent(roleId)}` : ""}`,
+    )
+      .then((result) => {
+        if (!live) return;
+        setSectionData(result);
+        const defaults = result.sections
+          .filter((section) => section.gaps.length)
+          .map((section) => section.section);
+        setChosenSections(defaults);
+      })
+      .catch((caught) => {
+        if (live) setSectionsError((caught as Error).message);
+      });
+    return () => {
+      live = false;
+    };
+  }, [org.id, roleId]);
+  const eligibleSources = useMemo(() => {
+    const folders = new Set(
+      (sectionData?.sections || [])
+        .filter(
+          (section) =>
+            chosenSections.includes(section.section) ||
+            section.section === "organisation",
+        )
+        .map((section) => section.folder),
+    );
+    return sources
+      .filter(
+        (source) =>
+          (!source.roleIds.length ||
+            !roleId ||
+            source.roleIds.includes(roleId)) &&
+          !!source.folder &&
+          folders.has(source.folder),
+      )
+      .sort((a, b) => b.retrievedAt.localeCompare(a.retrievedAt));
+  }, [chosenSections, roleId, sectionData, sources]);
+  useEffect(() => {
+    setSourceIds(eligibleSources.slice(0, 16).map((source) => source.id));
+  }, [eligibleSources.map((source) => source.id).join(",")]);
   const running = jobs.find(
     (j) => j.orgId === org.id && j.roleId === roleId && isActive(j),
   );
-  // Mirrors the server's selection: role-scoped research reads unscoped
-  // sources plus those linked to the role; the website is crawled first.
   const readable = sources.filter(
-    (s) => !s.roleIds.length || !roleId || s.roleIds.includes(roleId),
+    (source) =>
+      !source.roleIds.length || !roleId || source.roleIds.includes(roleId),
   ).length;
   const nothingToRead = !org.website && readable === 0;
   const configured = TIERS.some((t) => tiers[t.id]);
@@ -99,9 +162,9 @@ export function ResearchDialog({
         <U.DialogHeader>
           <U.DialogTitle>Start research</U.DialogTitle>
           <U.DialogDescription>
-            Reads {org.website ? "the organisation website and " : ""}the
-            captured sources for {org.name}, then drafts findings and questions
-            for the organisation. Nothing is accepted without a reviewer.
+            Reads the selected captured sources for {org.name}, then drafts
+            facts and questions for the organisation. Nothing is registered
+            without a reviewer.
           </U.DialogDescription>
         </U.DialogHeader>
         <div className="space-y-5">
@@ -137,6 +200,93 @@ export function ResearchDialog({
               and files the results under that role.
             </p>
           </div>
+          <fieldset className="space-y-2">
+            <legend className="text-p4 font-medium">Sections to fill</legend>
+            {!sectionData ? (
+              <U.Skeleton className="h-24 rounded-xl" />
+            ) : (
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {sectionData.sections.map((section) => (
+                  <label
+                    key={section.section}
+                    className="flex items-start gap-2 text-p4"
+                  >
+                    <U.Checkbox
+                      checked={chosenSections.includes(section.section)}
+                      onCheckedChange={(checked) =>
+                        setChosenSections((current) =>
+                          checked
+                            ? [...current, section.section]
+                            : current.filter(
+                                (value) => value !== section.section,
+                              ),
+                        )
+                      }
+                    />
+                    <span>
+                      {section.title}
+                      <span className="block text-p5 text-muted-foreground">
+                        {section.gaps.length} place
+                        {section.gaps.length === 1 ? "" : "s"} to fill
+                      </span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </fieldset>
+          {!!sectionData && (
+            <div className="space-y-2">
+              <p className="text-p4 font-medium">Places to fill</p>
+              <ul className="max-h-36 overflow-y-auto rounded-xl bg-muted p-3 text-p5">
+                {sectionData.missing
+                  .filter((missing) =>
+                    sectionData.sections.some(
+                      (section) =>
+                        chosenSections.includes(section.section) &&
+                        missing.startsWith(`${section.title}:`),
+                    ),
+                  )
+                  .map((missing) => (
+                    <li key={missing}>• {missing}</li>
+                  ))}
+              </ul>
+            </div>
+          )}
+          <fieldset className="space-y-2">
+            <legend className="text-p4 font-medium">
+              Sources to read ({sourceIds.length}/16)
+            </legend>
+            <p className="text-p5 text-muted-foreground">
+              Sources from the chosen sections and The organisation are selected
+              automatically. Untick any the run should not read.
+            </p>
+            <div className="max-h-48 overflow-y-auto space-y-2 rounded-xl border border-border p-3">
+              {eligibleSources.map((source) => (
+                <label key={source.id} className="flex items-start gap-2 text-p4">
+                  <U.Checkbox
+                    checked={sourceIds.includes(source.id)}
+                    disabled={
+                      !sourceIds.includes(source.id) && sourceIds.length >= 16
+                    }
+                    onCheckedChange={(checked) =>
+                      setSourceIds((current) =>
+                        checked
+                          ? [...current, source.id].slice(0, 16)
+                          : current.filter((id) => id !== source.id),
+                      )
+                    }
+                  />
+                  {source.title}
+                </label>
+              ))}
+              {!eligibleSources.length && (
+                <p className="text-p5 text-muted-foreground">
+                  No captured sources belong to these sections.
+                </p>
+              )}
+            </div>
+          </fieldset>
           <fieldset className="space-y-2">
             <legend className="text-p4 font-medium">Research tier</legend>
             <U.RadioGroup
@@ -224,6 +374,12 @@ export function ResearchDialog({
               <U.AlertDescription>{error}</U.AlertDescription>
             </U.Alert>
           )}
+          {sectionsError && (
+            <U.Alert role="alert" variant="destructive">
+              <U.AlertTitle>Sections could not be loaded</U.AlertTitle>
+              <U.AlertDescription>{sectionsError}</U.AlertDescription>
+            </U.Alert>
+          )}
         </div>
         <U.DialogFooter>
           <U.Button
@@ -234,12 +390,24 @@ export function ResearchDialog({
             Cancel
           </U.Button>
           <U.Button
-            disabled={busy || !tiers[tier] || !!running || nothingToRead}
+            disabled={
+              busy ||
+              !tiers[tier] ||
+              !!running ||
+              nothingToRead ||
+              !sectionData ||
+              !!sectionsError
+            }
             onClick={async () => {
               setBusy(true);
               setError("");
               try {
-                await onStart(tier, roleId);
+                await onStart(
+                  tier,
+                  roleId,
+                  chosenSections.length ? chosenSections : undefined,
+                  sourceIds.length ? sourceIds : undefined,
+                );
                 try {
                   localStorage.setItem(REMEMBERED, tier);
                 } catch {

@@ -25,7 +25,8 @@ export function sampleWorkspace(): Workspace {
     owner: "Alex Morgan",
     summary:
       "Fictional demonstration organisation. Explore how source material becomes an evidence-backed brief for a day in logistics.",
-    brandNotes: "Sample only. No employer branding or permissions implied.",
+    brandNotes: "Sample only. No organisation branding or permissions implied.",
+    factChecker: { name: "not yet known", jobTitle: "" },
   };
   w.organisations.push(o);
   const role = {
@@ -37,7 +38,7 @@ export function sampleWorkspace(): Workspace {
     responsibilities:
       "Coordinate incoming deliveries, check order records and prepare a clear shift handover.",
     boundaries:
-      "Escalation rules and decision authority need client confirmation.",
+      "Escalation rules and decision authority need organisation confirmation.",
     occupations: [],
   };
   w.roles.push(role);
@@ -77,7 +78,7 @@ export function sampleWorkspace(): Workspace {
     ],
     review: "unreviewed",
     rationale:
-      "Fictional demonstration evidence. Confirm scope with the actual employer.",
+      "Fictional demonstration evidence. Confirm scope with the actual organisation.",
     runIds: [],
     history: [],
   });

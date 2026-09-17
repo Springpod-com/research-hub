@@ -1,0 +1,5 @@
+Case material
+
+What the story needs to be plausible: the routine the role performs, what is measured and its units, the review lines and limits from standards and guidance (HSE, the industry's own), manufacturers' public manuals and datasheets for the equipment, trade press on what typically goes wrong. Tier 3. Every number the case uses should be traceable to a file here or be declared invented.
+
+Name every file with its date and where it came from, for example 2026-09-17_careers-page_apprenticeships.pdf, and log it in Springpod_LEARN_Organisation_Knowledge_Base_V1.docx.
