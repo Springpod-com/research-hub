@@ -54,9 +54,11 @@ import { SectionsView } from "./components/sections-view";
 import { FolderView } from "./components/folder-view";
 import { NoteForm } from "./components/note-form";
 import {
+  canEditSectionNote,
   extractionSourceIds,
   noteRoleIds,
   retryResearchBody,
+  runWorkspaceAction,
   validFolderSection,
 } from "./components/folder-workflow";
 import { FactPlacement } from "./components/fact-placement";
@@ -572,11 +574,17 @@ export function App({
     running.current = anyRunning;
     reschedule.current?.();
   }, [anyRunning]);
-  const run = async (fn: () => Promise<unknown>, message = "Saved") => {
+  const run = async (
+    fn: () => Promise<unknown>,
+    message = "Saved",
+    options?: {
+      afterReload?: () => Promise<unknown>;
+      rethrow?: boolean;
+    },
+  ) => {
     setBusy(true);
     try {
-      await fn();
-      await reload();
+      await runWorkspaceAction(fn, reload, options?.afterReload);
       U.toast({ title: message });
     } catch (e) {
       U.toast({
@@ -584,6 +592,7 @@ export function App({
         description: (e as Error).message,
         variant: "destructive",
       });
+      if (options?.rethrow) throw e;
     } finally {
       setBusy(false);
     }
@@ -2268,6 +2277,20 @@ export function App({
             summary={openFolder}
             sources={sources.filter((item) => item.folder === openFolder.folder)}
             findings={findings.filter((item) => sectionOfSlot(item.slot) === openFolder.section)}
+            canEditNote={canEditSectionNote(
+              openFolder,
+              !!session &&
+                ["researcher", "reviewer", "admin"].includes(session.role),
+              roleId === "all" ? undefined : roleId,
+            )}
+            noteEditHint={
+              openFolder.roleScoped &&
+              roleId === "all" &&
+              !!session &&
+              ["researcher", "reviewer", "admin"].includes(session.role)
+                ? "Choose a role to write a note for this folder."
+                : undefined
+            }
             onBack={() => {
               const next = new URLSearchParams(query);
               next.delete("section");
@@ -2277,6 +2300,37 @@ export function App({
             onSource={setSource}
             onFill={(slot) => setModal({ type: "finding", item: { slot } })}
             onFact={setEvidence}
+            onSaveNote={async (text) => {
+              if (openFolder.roleScoped && roleId === "all")
+                throw new Error("Choose a role to write a note for this folder.");
+              await run(
+                () =>
+                  api(
+                    `/orgs/${org!.id}/sections/${openFolder.section}/note`,
+                    {
+                      method: "PUT",
+                      body: JSON.stringify({
+                        text,
+                        roleId: openFolder.roleScoped ? roleId : undefined,
+                      }),
+                    },
+                  ),
+                "Note saved",
+                {
+                  rethrow: true,
+                  afterReload: async () => {
+                    const refreshed = await api<SectionsResponse>(
+                      `/orgs/${org!.id}/sections${
+                        roleId === "all"
+                          ? ""
+                          : `?roleId=${encodeURIComponent(roleId)}`
+                      }`,
+                    );
+                    setSectionData(refreshed);
+                  },
+                },
+              );
+            }}
           />
           )
         ) : evidenceMode === "sections" ? (

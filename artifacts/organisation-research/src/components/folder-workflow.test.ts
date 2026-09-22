@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ResearchJob, SectionSummary } from "../../shared/types";
 import {
+  canEditSectionNote,
   extractionSourceIds,
   noteRoleIds,
   retryResearchBody,
+  runWorkspaceAction,
   sectionSelectionReason,
   validFolderSection,
 } from "./folder-workflow";
@@ -21,6 +23,7 @@ const summary = (overrides: Partial<SectionSummary> = {}): SectionSummary => ({
   status: { stage: "complete", by: "researcher", at: "2026-01-01" },
   addedSinceExtraction: 0,
   unreviewed: 0,
+  note: null,
   ...overrides,
 });
 
@@ -34,6 +37,22 @@ describe("folder workflow safeguards", () => {
     expect(noteRoleIds("01-organisation", "role-1")).toEqual([]);
     expect(() => noteRoleIds("02-role")).toThrow("Choose a role");
     expect(noteRoleIds("02-role", "role-1")).toEqual(["role-1"]);
+  });
+
+  it("gates role-scoped note editing when all roles are selected", () => {
+    expect(canEditSectionNote(summary({ roleScoped: true }), true)).toBe(false);
+    expect(canEditSectionNote(summary({ roleScoped: true }), true, "role-1")).toBe(true);
+    expect(canEditSectionNote(summary(), true)).toBe(true);
+  });
+
+  it("reloads the workspace and sections after saving", async () => {
+    const calls: string[] = [];
+    await runWorkspaceAction(
+      async () => { calls.push("save"); },
+      async () => { calls.push("workspace"); },
+      async () => { calls.push("sections"); },
+    );
+    expect(calls).toEqual(["save", "workspace", "sections"]);
   });
 
   it("puts folder sources before organisation context and caps at 16", () => {

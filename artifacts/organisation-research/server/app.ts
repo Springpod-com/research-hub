@@ -44,6 +44,7 @@ import {
   sourceView,
   findingView,
   sectionsView,
+  requireRole,
   structuredFinding,
   validateOrganisationReferences,
   validateRoleReferences,
@@ -62,7 +63,7 @@ import type {
   Source,
   Workspace,
 } from "../shared/types.js";
-import { sections, slots } from "../shared/types.js";
+import { sectionNoteMaxLength, sections, slots } from "../shared/types.js";
 import {
   providers,
   providerAccess,
@@ -1246,6 +1247,59 @@ export function createApp(store: Store, options: AppOptions = {}) {
           return sectionsView(w, orgId, data.roleId).sections.find(
             (item) => item.section === section.section,
           );
+        }),
+      );
+    }),
+  );
+  app.put(
+    "/api/orgs/:orgId/sections/:section/note",
+    handler(async (req, res) => {
+      const section = sections.find(
+        (item) => item.section === String(req.params.section),
+      );
+      if (!section) throw new HttpError(404, "Section not found.");
+      const data = z
+        .object({
+          text: z
+            .string()
+            .transform((value) => value.trim())
+            .refine((value) => value.length <= sectionNoteMaxLength, {
+              message: `A designer's note cannot be longer than ${sectionNoteMaxLength.toLocaleString("en-GB")} characters.`,
+            }),
+          roleId: z.string().uuid().optional(),
+        })
+        .parse(req.body);
+      if (section.roleScoped && !data.roleId)
+        throw new HttpError(422, "A role is required for this section.");
+      if (!section.roleScoped && data.roleId)
+        throw new HttpError(
+          422,
+          "A role is not allowed for an organisation-wide section.",
+        );
+      res.json(
+        await mutate(req, res, (w, member) => {
+          requireRole(member, ["researcher", "reviewer", "admin"]);
+          const orgId = String(req.params.orgId);
+          roleInOrg(w, orgId, data.roleId);
+          const subject = section.roleScoped
+            ? get(w.roles, data.roleId!)
+            : get(w.organisations, orgId);
+          if (data.text) {
+            subject.sectionNotes ||= {};
+            subject.sectionNotes[section.section] = {
+              text: data.text,
+              by: member.name,
+              at: now(),
+            };
+          } else if (subject.sectionNotes) {
+            delete subject.sectionNotes[section.section];
+          }
+          subject.version++;
+          subject.updatedAt = now();
+          audit(w, member.userId, "section.note", subject.id);
+          return {
+            note: subject.sectionNotes?.[section.section] || null,
+          };
         }),
       );
     }),

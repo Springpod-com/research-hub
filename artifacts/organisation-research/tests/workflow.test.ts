@@ -742,9 +742,7 @@ describe("Knowledge-base derived views and packs", () => {
         "utf8",
       ),
     );
-    const sectionKeys = Object.keys(
-      schema.properties.sections.items.properties,
-    ).sort();
+    const sectionKeys = schema.properties.sections.items.required.sort();
     expect(Object.keys(pack.sections[0]).sort()).toEqual(sectionKeys);
     expect(pack.sections[0]).not.toHaveProperty("roleScoped");
     const {

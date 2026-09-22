@@ -283,6 +283,11 @@ Built: the six folders are the unit of work for each organisation.
   when it has no unreviewed facts. A later extraction never silently removes
   that sign-off: it leaves the status reviewed and records that new facts need
   review.
+- **Design notes and source trails.** Researchers can keep a designer's note
+  at the top of each folder. Pack snapshots preserve it, while Markdown and
+  DOCX exports finish every section with a "Sources read" table showing what
+  each filed source contributed. Folder exports include the note as
+  `00-designers-note.md`.
 
 Not proposed: categorising sources by chapter or chapter part. One source
 usually serves several parts, so the link to the chapter stays on the fact

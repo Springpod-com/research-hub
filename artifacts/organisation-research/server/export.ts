@@ -4,7 +4,7 @@ import JSZip from "jszip";
 import { load, type Cheerio, type CheerioAPI } from "cheerio";
 import type { Pack, PackV2, Slot, Source } from "../shared/types.js";
 import { partNames, slotFields } from "../shared/types.js";
-import { packMarkdown } from "./domain.js";
+import { packMarkdown, sourcesReadRows } from "./domain.js";
 import type { Store } from "./store.js";
 
 const templatePath = path.join(
@@ -402,6 +402,57 @@ function fillV2($: CheerioAPI, body: Cheerio<any>, pack: PackV2) {
     missing,
     ["#", "Fact", "Tier", "Source", "Parts", "Confirmed (initials, date)"],
   );
+  pack.sections.forEach((section, index) => {
+    const headingText = `${index + 1}. ${section.title}`;
+    const headingNode = body
+      .children("w\\:p")
+      .filter((_, node) => nodeText($, node) === headingText)
+      .first();
+    if (!headingNode.length) {
+      missing.push(headingText);
+      return;
+    }
+    if (section.note) {
+      const paragraphs = section.note.text
+        .split(/\r?\n\s*\r?\n/)
+        .map(
+          (value) =>
+            `<w:p><w:r><w:t xml:space="preserve">${escaped(value)}</w:t></w:r></w:p>`,
+        );
+      headingNode.after(
+        [
+          styledParagraph("Heading3", "Designer's note"),
+          ...paragraphs,
+          `<w:p><w:r><w:rPr><w:i/></w:rPr><w:t xml:space="preserve">${escaped(`${section.note.by} · ${section.note.at.slice(0, 10)}`)}</w:t></w:r></w:p>`,
+        ].join(""),
+      );
+    }
+    const nextHeading =
+      index + 1 < pack.sections.length
+        ? `${index + 2}. ${pack.sections[index + 1].title}`
+        : "7. Fact register";
+    const nextNode = body
+      .children("w\\:p")
+      .filter((_, node) => nodeText($, node) === nextHeading)
+      .first();
+    if (!nextNode.length) {
+      missing.push(nextHeading);
+      return;
+    }
+    const rows = sourcesReadRows(pack, section);
+    nextNode.before(
+      styledParagraph("Heading3", "Sources read"),
+      genericTable([
+        ["Source", "Tier", "What it gave us", "Date read"],
+        ...rows.map((row) => [
+          row.source,
+          row.tier,
+          row.contribution,
+          row.date,
+        ]),
+      ]),
+    );
+  });
   body.children("w\\:sectPr").before(
     styledParagraph("Heading2", "Limitations"),
     ...[...pack.limitations, ...missing.map((name) => `Template section not found: ${name}`)].map(
@@ -547,6 +598,13 @@ async function buildFolderZip(pack: Pack, store: Store) {
       `${folder}/About this folder.txt`,
       await readFile(path.join(foldersPath, folder, "About this folder.txt")),
     );
+  if (pack.schemaVersion === "2.0.0")
+    for (const section of pack.sections)
+      if (section.note)
+        add(
+          `${section.folder}/00-designers-note.md`,
+          `# Designer's note\n\n_${section.note.by} · ${section.note.at.slice(0, 10)}_\n\n${section.note.text}\n`,
+        );
 
   let sourceBytes = 0;
   let sourceCount = 0;

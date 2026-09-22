@@ -1,4 +1,5 @@
-import { tierNames, type Finding, type SectionSummary, type Slot, type Source } from "../../shared/types";
+import { useEffect, useState } from "react";
+import { sectionNoteMaxLength, tierNames, type Finding, type SectionSummary, type Slot, type Source } from "../../shared/types";
 import * as U from "../ui";
 
 const sourceKind: Record<Source["kind"], string> = {
@@ -8,19 +9,100 @@ const sourceKind: Record<Source["kind"], string> = {
 };
 const shownDate = (value: string) => new Date(value).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 
-export function FolderView({ summary, sources, findings, onBack, onSource, onFill, onFact }: {
+export function FolderView({ summary, sources, findings, canEditNote, noteEditHint, onBack, onSource, onFill, onFact, onSaveNote }: {
   summary: SectionSummary;
   sources: Source[];
   findings: Finding[];
+  canEditNote: boolean;
+  noteEditHint?: string;
   onBack: () => void;
   onSource: (source: Source) => void;
   onFill: (slot: Slot) => void;
   onFact: (finding: Finding) => void;
+  onSaveNote: (text: string) => Promise<void>;
 }) {
+  const [editingNote, setEditingNote] = useState(false);
+  const [noteText, setNoteText] = useState(summary.note?.text || "");
+  const [noteSaving, setNoteSaving] = useState(false);
+  const [noteError, setNoteError] = useState("");
+
+  useEffect(() => {
+    if (!editingNote) setNoteText(summary.note?.text || "");
+  }, [summary.note, editingNote]);
+
+  const saveNote = async () => {
+    setNoteSaving(true);
+    setNoteError("");
+    try {
+      await onSaveNote(noteText);
+      setEditingNote(false);
+    } catch (caught) {
+      setNoteError((caught as Error).message);
+    } finally {
+      setNoteSaving(false);
+    }
+  };
+
+  const cancelNote = () => {
+    setNoteText(summary.note?.text || "");
+    setNoteError("");
+    setEditingNote(false);
+  };
+
   return (
     <div className="space-y-6">
       <U.Button variant="ghost" onClick={onBack}><U.IconArrowLeft size={18} />Back to all folders</U.Button>
       <div><h2 className="text-h4">{summary.title}</h2><p className="text-p4 text-muted-foreground mt-1">{sources.length} item{sources.length === 1 ? "" : "s"} in this folder</p></div>
+      <U.Card>
+        <U.CardHeader className="flex-row items-center justify-between gap-3">
+          <U.CardTitle className="text-h6">Designer's note</U.CardTitle>
+          {canEditNote && !editingNote && (
+            <U.Button size="sm" variant="outline" onClick={() => setEditingNote(true)}>
+              {summary.note ? "Edit" : "Write a note"}
+            </U.Button>
+          )}
+        </U.CardHeader>
+        <U.CardContent>
+          {editingNote ? (
+            <div className="space-y-3">
+              <U.Textarea
+                aria-label="Designer's note"
+                value={noteText}
+                maxLength={sectionNoteMaxLength}
+                rows={8}
+                onChange={(event) => setNoteText(event.target.value)}
+              />
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <p className="text-p5 text-muted-foreground">
+                  {noteText.length.toLocaleString("en-GB")} / {sectionNoteMaxLength.toLocaleString("en-GB")}
+                </p>
+                <div className="flex gap-2">
+                  <U.Button size="sm" variant="outline" disabled={noteSaving} onClick={cancelNote}>Cancel</U.Button>
+                  <U.Button size="sm" disabled={noteSaving} onClick={() => void saveNote()}>
+                    {noteSaving ? "Saving…" : "Save"}
+                  </U.Button>
+                </div>
+              </div>
+              {noteError && (
+                <U.Alert role="alert" variant="destructive">
+                  <U.AlertTitle>Note could not be saved</U.AlertTitle>
+                  <U.AlertDescription>{noteError}</U.AlertDescription>
+                </U.Alert>
+              )}
+            </div>
+          ) : summary.note ? (
+            <div className="space-y-2">
+              <p className="text-p4 whitespace-pre-wrap break-words">{summary.note.text}</p>
+              <p className="text-p5 text-muted-foreground">{summary.note.by} · {shownDate(summary.note.at)}</p>
+            </div>
+          ) : (
+            <p className="text-p4 text-muted-foreground">No designer's note yet.</p>
+          )}
+          {!editingNote && noteEditHint && (
+            <p className="mt-2 text-p5 text-muted-foreground">{noteEditHint}</p>
+          )}
+        </U.CardContent>
+      </U.Card>
       <section className="space-y-3">
         <h3 className="text-h6">Folder contents</h3>
         <U.DataTable data={sources} getRowId={(source) => source.id} showColumnVisibility={false} columns={[

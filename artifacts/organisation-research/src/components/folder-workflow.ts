@@ -23,6 +23,22 @@ export const noteRoleIds = (folder: Folder, roleId?: string): string[] => {
   return [roleId];
 };
 
+export const canEditSectionNote = (
+  section: Pick<SectionSummary, "roleScoped">,
+  canEdit: boolean,
+  roleId?: string,
+) => canEdit && (!section.roleScoped || !!roleId);
+
+export const runWorkspaceAction = async (
+  action: () => Promise<unknown>,
+  reloadWorkspace: () => Promise<unknown>,
+  afterReload?: () => Promise<unknown>,
+) => {
+  await action();
+  await reloadWorkspace();
+  await afterReload?.();
+};
+
 export const extractionSourceIds = (
   sources: Pick<Source, "id" | "folder">[],
   folder: Folder,

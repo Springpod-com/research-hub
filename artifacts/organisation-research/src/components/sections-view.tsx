@@ -42,7 +42,10 @@ export function SectionsView({
             <U.CardHeader>
               <div className="flex items-start justify-between gap-3">
                 <U.CardTitle className="text-h6">{section.title}</U.CardTitle>
-                <U.Badge variant="outline">{sectionStageNames[section.status.stage]}</U.Badge>
+                <div className="flex flex-wrap justify-end gap-2">
+                  {section.note && <U.Badge variant="outline">Note</U.Badge>}
+                  <U.Badge variant="outline">{sectionStageNames[section.status.stage]}</U.Badge>
+                </div>
               </div>
               <U.CardDescription>
                 {section.filled}/{section.total} places filled · {section.sourceIds.length} item{section.sourceIds.length === 1 ? "" : "s"}

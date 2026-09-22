@@ -642,6 +642,15 @@ export function roleFingerprint(w: Workspace, role: Role): string {
       "interview",
     ]),
     organisation: org ? pick(org, orgKeys) : null,
+    sectionNotes: Object.fromEntries(
+      sections.map((section) => [
+        section.section,
+        (section.roleScoped
+          ? role.sectionNotes?.[section.section]
+          : org?.sectionNotes?.[section.section]
+        )?.text || "",
+      ]),
+    ),
     findings: findings.map((f) => ({
       ...pick(f, [
         "id",
@@ -851,6 +860,9 @@ export function sectionsView(
     const status = section.roleScoped
       ? role?.sectionStatus?.[section.section] || gathering()
       : organisation.sectionStatus?.[section.section] || gathering();
+    const note = section.roleScoped
+      ? role?.sectionNotes?.[section.section] || null
+      : organisation.sectionNotes?.[section.section] || null;
     const unreviewed = relevantFindings.filter(
       (finding) =>
         finding.review === "unreviewed" &&
@@ -876,6 +888,7 @@ export function sectionsView(
       sourceIds,
       gaps: sectionSlots.filter((slot) => !slot.filled).map((slot) => slot.label),
       status,
+      note,
       addedSinceExtraction,
       unreviewed,
     };
@@ -1119,6 +1132,11 @@ const packV2Schema = packBaseSchema.extend({
     section: z.enum(["organisation", "role", "case", "media", "brand", "supplied"]),
     folder: z.enum(["01-organisation", "02-role", "03-case-material", "04-media", "05-brand", "06-organisation-supplied"]),
     title: z.string(),
+    note: z.object({
+      text: z.string(),
+      by: z.string(),
+      at: z.string(),
+    }).optional(),
     slots: z.array(z.object({ slot: slotSchema, label: z.string(), findingIds: z.array(z.string().uuid()) })),
   })),
   register: z.array(registerRowSchema),
@@ -1167,10 +1185,23 @@ export function makePack(
           s.roleIds.includes(roleId)),
     )
     .map(({ blob, ...rest }) => sourceView(rest));
+  const organisation = get(w.organisations, orgId);
+  const role = roleView(w, get(w.roles, roleId));
   const sectionRows = sections.map((section) => ({
     section: section.section,
     folder: section.folder,
     title: section.title,
+    ...((section.roleScoped
+      ? role.sectionNotes?.[section.section]
+      : organisation.sectionNotes?.[section.section])
+      ? {
+          note: structuredClone(
+            (section.roleScoped
+              ? role.sectionNotes?.[section.section]
+              : organisation.sectionNotes?.[section.section])!,
+          ),
+        }
+      : {}),
     slots: slots.filter((slot) => slot.section === section.section).map((slot) => ({
       slot: slot.slot,
       label: slot.label,
@@ -1196,8 +1227,6 @@ export function makePack(
       verified: !!finding.verified,
     };
   });
-  const organisation = get(w.organisations, orgId);
-  const role = roleView(w, get(w.roles, roleId));
   const pack: PackV2 = {
     schemaVersion: "2.0.0",
     id: randomUUID(),
@@ -1302,6 +1331,52 @@ export function packMarkdown(p: Pack): string {
   return out.join("\n\n") + "\n";
 }
 const cell = (value: string) => value.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+export interface SourcesReadRow {
+  source: string;
+  tier: Tier;
+  contribution: string;
+  date: string;
+}
+/** Build a section's source trail from the immutable contents of a pack. */
+export function sourcesReadRows(
+  p: PackV2,
+  section: PackV2["sections"][number],
+): SourcesReadRow[] {
+  const placeFor = (slot: Slot) => {
+    for (const candidate of p.sections) {
+      const place = candidate.slots.find((item) => item.slot === slot);
+      if (place)
+        return candidate.section === section.section
+          ? place.label
+          : `${candidate.title} · ${place.label}`;
+    }
+    return undefined;
+  };
+  return p.sources
+    .map((source) => sourceView(source))
+    .filter((source) => source.folder === section.folder)
+    .sort(
+      (a, b) =>
+        a.retrievedAt.localeCompare(b.retrievedAt) ||
+        a.title.localeCompare(b.title, "en-GB"),
+    )
+    .map((source) => {
+      const places = [
+        ...new Set(
+          p.register
+            .filter((row) => row.sourceIds.includes(source.id))
+            .map((row) => placeFor(row.slot))
+            .filter(Boolean) as string[],
+        ),
+      ];
+      return {
+        source: source.title,
+        tier: source.tier!,
+        contribution: places.join("; ") || "No facts yet",
+        date: source.retrievedAt.slice(0, 10) || "—",
+      };
+    });
+}
 function packMarkdownV2(p: PackV2): string {
   const sourceNames = new Map(p.sources.map((source) => [source.id, source.title]));
   const sourceText = (ids: string[]) => ids.map((id) => sourceNames.get(id) || id).join("; ");
@@ -1333,6 +1408,12 @@ function packMarkdownV2(p: PackV2): string {
   ];
   p.sections.forEach((section, index) => {
     out.push(`## ${index + 1}. ${section.title}`);
+    if (section.note)
+      out.push(
+        "### Designer's note",
+        section.note.text,
+        `_${section.note.by} · ${section.note.at.slice(0, 10)}_`,
+      );
     if (section.section === "brand" && p.organisation.brand) {
       const brand = p.organisation.brand;
       out.push(
@@ -1379,6 +1460,18 @@ function packMarkdownV2(p: PackV2): string {
         );
       } else out.push(...rows.map((row) => `${row.claim}\n\nTier ${row.tier} · ${row.sourceIds.map((id) => sourceNames.get(id) || id).join("; ") || "No source"} · ${row.date || "No date"} · ${row.parts.join(", ") || "No chapter parts"}`));
     }
+    const sourceRows = sourcesReadRows(p, section);
+    out.push("### Sources read");
+    if (sourceRows.length)
+      out.push(
+        "| Source | Tier | What it gave us | Date read |",
+        "| --- | --- | --- | --- |",
+        ...sourceRows.map(
+          (row) =>
+            `| ${cell(row.source)} | ${row.tier} | ${cell(row.contribution)} | ${row.date} |`,
+        ),
+      );
+    else out.push("_No sources filed in this folder._");
   });
   out.push(
     "## 7. Fact register",

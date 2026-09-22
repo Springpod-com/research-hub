@@ -105,6 +105,8 @@ export interface SectionSummary {
   addedSinceExtraction: number;
   /** Facts in scope still to be reviewed (gates "Reviewed"). */
   unreviewed: number;
+  /** Designer's note for the section in scope; null when none has been written. */
+  note: SectionNote | null;
 }
 export interface SectionsResponse {
   sections: SectionSummary[];
@@ -133,6 +135,14 @@ export interface SectionStatus {
   by: string;
   at: string;
 }
+/** Designer's note for a section: free Markdown text shown at the top of the section, kept apart from the facts. */
+export interface SectionNote {
+  text: string;
+  by: string;
+  at: string;
+}
+/** Longest designer's note accepted, in characters. */
+export const sectionNoteMaxLength = 20_000;
 export type Permission =
   "research-only" | "awaiting-confirmation" | "learner-approved";
 export interface Base {
@@ -164,6 +174,8 @@ export interface Organisation extends Base {
   mustNotSay?: Attributed[];
   /** Folder status of the organisation-wide sections (organisation, brand, supplied). */
   sectionStatus?: Partial<Record<Section, SectionStatus>>;
+  /** Designer's notes per section in this scope. */
+  sectionNotes?: Partial<Record<Section, SectionNote>>;
 }
 export interface Attributed {
   text: string;
@@ -297,6 +309,8 @@ export interface Role extends Base {
   interview?: Interview;
   /** Folder status of the role-scoped sections (role, case, media). */
   sectionStatus?: Partial<Record<Section, SectionStatus>>;
+  /** Designer's notes per section in this scope. */
+  sectionNotes?: Partial<Record<Section, SectionNote>>;
 }
 export interface Source extends Base {
   orgId: string;
@@ -554,6 +568,8 @@ export interface PackV2 extends PackBase {
     folder: Folder;
     title: string;
     slots: { slot: Slot; label: string; findingIds: string[] }[];
+    /** Designer's note snapshotted with the pack; absent when none was written. */
+    note?: SectionNote;
   }[];
   register: RegisterRow[];
   /** "For the organisation to confirm": rows at tiers 2–4 used by a chapter part and not verified. */

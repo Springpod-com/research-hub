@@ -120,6 +120,7 @@
           "section": { "type": "string", "enum": ["organisation", "role", "case", "media", "brand", "supplied"] },
           "folder": { "type": "string", "enum": ["01-organisation", "02-role", "03-case-material", "04-media", "05-brand", "06-organisation-supplied"] },
           "title": { "type": "string" },
+          "note": { "$ref": "#/$defs/sectionNote" },
           "slots": {
             "type": "array",
             "items": {
@@ -158,6 +159,16 @@
         "sourceId": { "type": "string", "format": "uuid" }
       },
       "required": ["text", "sourceId"],
+      "additionalProperties": false
+    },
+    "sectionNote": {
+      "type": "object",
+      "properties": {
+        "text": { "type": "string", "maxLength": 20000 },
+        "by": { "type": "string" },
+        "at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["text", "by", "at"],
       "additionalProperties": false
     },
     "slot": {

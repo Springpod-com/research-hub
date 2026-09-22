@@ -167,3 +167,40 @@ with the existing layout and 2.0.0 packs as the eight-section document:
 - Readiness blocks a section which has at least one filled place but remains
   gathering: `The folder for <section> has facts but was never marked
   complete.`
+
+## Step 6: designer's notes and "Sources read"
+
+- `SectionNote` (`shared/types.ts`) is `{text, by, at}`; notes live on
+  `Organisation.sectionNotes` (organisation, brand, supplied) and
+  `Role.sectionNotes` (role, case, media), the same scoping as `sectionStatus`.
+- `GET /api/orgs/:orgId/sections?roleId=<id>` returns `note: SectionNote |
+  null` for every section.
+- `PUT /api/orgs/:orgId/sections/:section/note` body `{text, roleId?}`.
+  Researchers and above. `text` is trimmed; an empty string removes the note;
+  longer than `sectionNoteMaxLength` (20,000 characters) is 422. Role id is
+  required only for role-scoped sections, validated as for status. The server
+  fills `by` (session name) and `at`. Response `{note: SectionNote | null}`.
+  Audited as `section.note`. Note text (not `by`/`at`) participates in the
+  ready-content fingerprint because it appears in the document.
+- Pack 2.0.0 `sections[]` entries gain optional `note` (the note at snapshot
+  time). Additive; `schemaVersion` stays `2.0.0` and
+  `docs/research-pack-v2.schema.json` lists the property.
+- Markdown (`/md`), for 2.0.0 packs: directly under each section heading, when
+  a note exists, `### Designer's note`, the text verbatim, then `_<by> ·
+  <date>_`. At the end of every section, `### Sources read` with a table
+  `Source · Tier · What it gave us · Date read`: one row per pack source whose
+  (derived) folder is the section's, ordered by `retrievedAt` then title.
+  "What it gave us" lists the places filled by facts citing the source, as
+  the slot label when the place is in this section and `<section title> ·
+  <slot label>` otherwise, de-duplicated, or `No facts yet`. "Date read" is
+  the `retrievedAt` date or `—`. With no sources the heading is followed by
+  `_No sources filed in this folder._`
+- DOCX: the same two blocks — a `Heading3` "Designer's note" with one
+  paragraph per blank-line-separated block of the text, inserted straight
+  after the section heading; a `Heading3` "Sources read" and table inserted
+  before the next section heading (before "7. Fact register" for section 6).
+- ZIP: a folder with a note also contains `00-designers-note.md` (title line,
+  `by · date`, blank line, text).
+- Client: the folder view shows the note at the top of the folder with
+  "Write a note" / "Edit" for researchers and above (textarea with the
+  character limit, Save, Cancel; saving empty text clears the note).
