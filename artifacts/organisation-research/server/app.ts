@@ -31,7 +31,6 @@ import {
   review,
   roleInOrg,
   validateCitations,
-  quoteFound as quoteStillPresent,
   readiness,
   makePack,
   packMarkdown,
@@ -49,6 +48,7 @@ import {
   validateOrganisationReferences,
   validateRoleReferences,
 } from "./domain.js";
+import { buildQuotationIndex, locateQuotation } from "./quotation.js";
 import {
   datasetSummaries,
   getEntry,
@@ -940,19 +940,21 @@ export function createApp(store: Store, options: AppOptions = {}) {
           w.sources.push(source);
           const at = source.retrievedAt;
           const affected: string[] = [];
+          const refreshedQuotationIndex = buildQuotationIndex(p.text);
+          const previousQuotationIndex = buildQuotationIndex(previous.text);
           for (const f of w.findings) {
             const cited = f.citations.filter((c) => lineage.has(c.sourceId));
             if (!cited.length) continue;
-            const quoteFound = cited.every((c) =>
-              quoteStillPresent(p.text, c.quote),
+            const quoteFound = cited.every(
+              (c) => locateQuotation(refreshedQuotationIndex, c.quote) !== null,
             );
             // Each quotation is judged on its own: one that was still in the
             // last capture and is gone now is a new disappearance, however
             // many others were already missing (and flagged) before.
             const newlyMissing = cited.some(
               (c) =>
-                quoteStillPresent(previous.text, c.quote) &&
-                !quoteStillPresent(p.text, c.quote),
+                locateQuotation(previousQuotationIndex, c.quote) !== null &&
+                locateQuotation(refreshedQuotationIndex, c.quote) === null,
             );
             if (!quoteFound && !newlyMissing) continue;
             f.sourceChanges = [

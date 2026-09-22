@@ -11,6 +11,11 @@ import {
   sectionsView,
   structuredFinding,
 } from "./domain.js";
+import {
+  buildQuotationIndex,
+  locateQuotation,
+  type QuotationIndex,
+} from "./quotation.js";
 import { fetchPublic, extractPage } from "./retrieval.js";
 import type {
   ModelSlot,
@@ -474,10 +479,35 @@ export async function processJob(store: Store, id: string) {
             const j = get(state.jobs, id);
             if (j.status === "cancelled") return;
             const findingIds: string[] = [];
+            const quotationIndexes = new Map<string, QuotationIndex>();
             let accepted = 0;
             for (const f of result.data.findings) {
               try {
-                validateCitations(state.sources, org.id, f.kind, f.citations);
+                for (const citation of f.citations) {
+                  const source = state.sources.find(
+                    (item) => item.id === citation.sourceId,
+                  );
+                  let quotationIndex = source
+                    ? quotationIndexes.get(source.id)
+                    : undefined;
+                  if (source && !quotationIndex) {
+                    quotationIndex = buildQuotationIndex(source.text);
+                    quotationIndexes.set(source.id, quotationIndex);
+                  }
+                  const exact = quotationIndex
+                    ? locateQuotation(quotationIndex, citation.quote)
+                    : null;
+                  if (exact === null)
+                    throw new Error("Quotation was not found in its source.");
+                  citation.quote = exact;
+                }
+                validateCitations(
+                  state.sources,
+                  org.id,
+                  f.kind,
+                  f.citations,
+                  quotationIndexes,
+                );
                 const originalSlot = f.slot as import("../shared/types.js").Slot;
                 const generatedSection = knowledgeSections.find((section) =>
                   slots.some(
@@ -485,12 +515,11 @@ export async function processJob(store: Store, id: string) {
                       slot.slot === originalSlot &&
                       slot.section === section.section,
                   ),
-                )?.section;
+                );
                 const outsideRequestedFolders =
-                  !!job.sections &&
+                  !role &&
                   originalSlot !== "none" &&
-                  !!generatedSection &&
-                  !job.sections.includes(generatedSection);
+                  !!generatedSection?.roleScoped;
                 const effectiveSlot = outsideRequestedFolders
                   ? "none"
                   : originalSlot;
@@ -645,6 +674,48 @@ export async function processJob(store: Store, id: string) {
           };
           subject.updatedAt = at;
           subject.version++;
+        }
+        const runIds = new Set(current.runs.map((run) => run.id));
+        const crossFolderCounts = new Map<string, number>();
+        for (const finding of state.findings) {
+          if (!finding.runIds.some((runId) => runIds.has(runId))) continue;
+          const section = knowledgeSections.find((candidate) =>
+            slots.some(
+              (slot) =>
+                slot.slot === finding.slot &&
+                slot.section === candidate.section,
+            ),
+          );
+          if (!section || job.sections!.includes(section.section)) continue;
+          crossFolderCounts.set(
+            section.section,
+            (crossFolderCounts.get(section.section) || 0) + 1,
+          );
+        }
+        for (const [sectionId] of crossFolderCounts) {
+          const section = knowledgeSections.find(
+            (candidate) => candidate.section === sectionId,
+          )!;
+          const subject = section.roleScoped ? scopedRole : organisation;
+          if (subject?.sectionStatus?.[section.section]?.stage === "reviewed")
+            current.errors.push(
+              `Section ${section.title} was already reviewed; new facts need review`,
+            );
+        }
+        if (crossFolderCounts.size) {
+          const placements = knowledgeSections
+            .filter((section) => crossFolderCounts.has(section.section))
+            .map(
+              (section) =>
+                `${section.title} (${crossFolderCounts.get(section.section)})`,
+            );
+          const total = [...crossFolderCounts.values()].reduce(
+            (sum, count) => sum + count,
+            0,
+          );
+          current.errors.push(
+            `Placed ${total} ${total === 1 ? "fact" : "facts"} in other folders: ${placements.join(", ")}`,
+          );
         }
       });
     await update((j) => {

@@ -105,3 +105,75 @@ All five runs used `gemini-3-flash-preview`, completed with status `gaps`, and r
 - The offline “Compiled by” value is “Ollie Fisher, Springpod”. The rebuild was necessarily performed by the throwaway account whose required display name was “Springpod research”. The platform export nevertheless renders the raw Clerk user id in “Compiled by”, not the member display name. This is an export bug; no application code was changed to conceal it.
 - The fact-checker text was carried across as “Not yet known — section 8, question 1”. The export appends an empty job-title separator.
 - The platform snapshot dates reflect the actual rebuild date, 22 September 2026, rather than copying the offline document’s 17 September 2026 compilation date.
+
+## Re-run after extraction changes (22 September 2026)
+
+### Method
+
+The re-run used the same Marriott organisation and role, and the same source ids in each numbered folder. Before extraction, all 26 existing non-rejected Marriott facts were rejected through `PATCH /api/findings/:id`; no fact rows were deleted through SQL. Five separate economy-tier runs were then made with the role id, one section and that folder’s exact source ids, with crawling disabled.
+
+Re-run pack: `15e303ef-7b1c-44ea-a92e-242c71df800a`.
+
+### Headline difference
+
+| Measure | Original platform run | Re-run | Change |
+|---|---:|---:|---:|
+| Non-rejected facts | 26 | 17 | -9 |
+| Tier 1 | 12 | 8 | -4 |
+| Tier 2 | 5 | 6 | +1 |
+| Tier 3 | 9 | 3 | -6 |
+| Tier 4 | 0 | 0 | 0 |
+| Places filled | 17 / 33 | 15 / 33 | -2 places |
+| Unplaced facts | 8 | 0 | -8 |
+| Cross-folder placements | 0 | 1 | +1 |
+
+The changed extractor eliminated unplaced retained facts in this run and successfully placed one supplied-folder fact into Brand. It did not increase the total retained fact count in this sample: model output and quotation validation are still variable, and this re-run retained nine fewer facts overall.
+
+The cross-folder placement was produced by the supplied-folder run:
+
+> `brand.colour` — “Bonvoy Coral; #FF9662; seen Logos on high contrast background colors.”
+
+### Places filled by section
+
+| Section | Original run | Re-run | Change |
+|---|---:|---:|---:|
+| 1. The organisation | 3 / 7 | 3 / 7 | — |
+| 2. The role | 4 / 8 | 3 / 8 | -1 |
+| 3. Case material | 5 / 6 | 2 / 6 | -3 |
+| 4. Media | 0 / 1 | 0 / 1 | — |
+| 5. Brand | 4 / 7 | 5 / 7 | +1 |
+| 6. Supplied by the organisation | 1 / 4 | 2 / 4 | +1 |
+
+### Re-run extraction results and exclusions
+
+All five final job states were `gaps` and used `gemini-3-flash-preview`.
+
+| Folder | Duration | Facts retained | Cross-folder | Unplaced | Exclusions |
+|---|---:|---:|---:|---:|---:|
+| 01 organisation | 58.8 s | 3 | 0 | 0 | 6 |
+| 02 role | 17.7 s | 4 | 0 | 0 | 5 |
+| 03 case material | 38.6 s | 2 | 0 | 0 | 7 |
+| 05 brand | 18.7 s | 5 | 0 | 0 | 1 |
+| 06 supplied | 271.9 s including recovery | 3 | 1 | 0 | 5 |
+
+For organisation, role, case, brand and the five supplied-folder exclusions, the recorded wording was:
+
+> “A generated fact was excluded because its quotation or evidence category could not be verified.”
+
+The supplied-folder job also recorded two non-exclusion messages:
+
+> “An interrupted research run was recovered. Completed evidence has been retained.”
+
+> “Placed 1 fact in other folders: Brand (1)”
+
+The interruption happened after an initial pack request was made while the supplied job was still being recovered; the dev API became briefly unavailable and then recovered the research job automatically. The final pack was created only after every job had reached a terminal state. No application code or database rows were changed as a workaround.
+
+### Export header and files
+
+The compiled-by behaviour is fixed in this pack. The re-run Markdown header shows **“Springpod research”**, the workspace member name, rather than the raw Clerk user id seen in the original platform export.
+
+Re-run exports:
+
+- `Marriott_Executive-Sous-Chef_platform_rerun.md`
+- `Marriott_Executive-Sous-Chef_platform_rerun.docx`
+- `Marriott_confirm_rerun.md`

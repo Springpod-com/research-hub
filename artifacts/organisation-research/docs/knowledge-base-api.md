@@ -160,6 +160,14 @@ with the existing layout and 2.0.0 packs as the eight-section document:
 - Research creation accepts optional `crawl`. The worker crawls when it is
   `true`, never when it is `false`, and when absent retains the default of
   crawling only if `sourceIds` was not supplied. Notes are readable evidence.
+- Quotation matching tolerates presentational differences in Unicode form,
+  quotation marks, dashes, ellipses, whitespace and letter case. A retained
+  citation stores the exact matching span from the captured source.
+- A role-scoped run may place a fact in any valid section, including one not
+  requested by the run. An organisation-wide run still leaves a role, case or
+  media placement unplaced. Other sections keep their existing workflow status;
+  the job records cross-folder totals and warns when a destination was already
+  reviewed.
 - A completed or gaps run marks each requested section `extracted` in its
   organisation or role scope. A section already `reviewed` is not downgraded;
   the job instead records `Section <title> was already reviewed; new facts need

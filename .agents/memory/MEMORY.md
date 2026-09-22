@@ -3,3 +3,4 @@
 - [Signed-in UI verification](ui-verification.md) — swap the dev API child for the fixture preview server to screenshot authenticated pages.
 - [Delegation quirks](delegation-quirks.md) — waitForJob timeout aborts the block (one wait per block); grep routes before briefing; shared types first, then parallel server/src builders.
 - [Workspace document load & VM capacity](workspace-document-load.md) — keep bulk bytes out of the workspace JSON row; per-user ETag rule; VM was 2 GB (ClamAV ~1 GB) until 2026-09-17, now 8 GB; scanner memory rules.
+- [Extraction yield](extraction-yield.md) — quotation-format tolerance did not cut 'could not be verified' exclusions on a real 30-source pack; single runs vary widely, so measure with several runs and log the specific exclusion reason first.

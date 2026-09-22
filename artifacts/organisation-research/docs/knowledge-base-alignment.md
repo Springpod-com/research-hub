@@ -279,6 +279,11 @@ Built: the six folders are the unit of work for each organisation.
   evidence into the section's places. Completion marks the folder extracted;
   material added afterwards is counted. Crawling the organisation website is
   optional rather than a required part of this workflow.
+- **Keep supported facts.** Presentational differences in quotations are
+  normalised during verification, while the exact captured wording is stored.
+  Role-scoped runs may place supported facts in other folders without changing
+  those folders' workflow status; organisation-wide runs cannot place facts in
+  role-scoped folders.
 - **Reviewed.** A reviewer or administrator can mark a folder reviewed only
   when it has no unreviewed facts. A later extraction never silently removes
   that sign-off: it leaves the status reviewed and records that new facts need

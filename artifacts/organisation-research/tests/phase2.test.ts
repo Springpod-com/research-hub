@@ -529,6 +529,57 @@ describe("Refresh transitions", () => {
       "Re-review facts whose source page changed since the quotation was captured.",
     );
   });
+  it("does not flag a quotation retained with normalised punctuation and spacing", async () => {
+    const exact = "The “night team” checks\u00a0stock—then records it.";
+    const source: Source = {
+      ...base(),
+      orgId: fixture.organisations[0].id,
+      roleIds: [role().id],
+      title: "Normalised quotation source",
+      kind: "web",
+      url: "https://northstar.example/normalised",
+      text: exact,
+      locator: "Captured page excerpt",
+      permission: "research-only",
+      verification: "public-source",
+      suppliedBy: "Public website",
+      publishedAt: "",
+      retrievedAt: now(),
+      runIds: [],
+    };
+    const finding = {
+      ...base(),
+      orgId: source.orgId,
+      roleId: role().id,
+      kind: "company" as const,
+      claim: "The night team checks stock before recording it.",
+      citations: [{ sourceId: source.id, quote: exact, locator: "Paragraph 1" }],
+      review: "accepted" as const,
+      reviewer: reviewer.userId,
+      reviewedAt: now(),
+      rationale: "",
+      runIds: [],
+      history: [],
+    };
+    await store.transact((workspace) => {
+      workspace.sources.push(source);
+      workspace.findings.push(finding);
+    });
+    page.current = html(
+      '<p>the "night team" checks stock-then records it.</p>',
+    );
+
+    const refreshed = await request(app()).post(
+      `/api/sources/${source.id}/refresh`,
+    );
+    expect(refreshed.status).toBe(201);
+    expect(refreshed.body.affectedFindingIds).not.toContain(finding.id);
+    const workspace = (await request(app()).get("/api/workspace")).body;
+    const stored = workspace.findings.find(
+      (item: { id: string }) => item.id === finding.id,
+    );
+    expect(stored.sourceChanges.at(-1).quoteFound).toBe(true);
+  });
   it("reverts ready when source provenance changes or a research run records an error", async () => {
     const w = (await request(app()).get("/api/workspace")).body;
     const flagged = w.findings.find((f: { claim: string }) =>

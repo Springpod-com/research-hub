@@ -24,6 +24,11 @@ import {
   slotFields,
   tierNames,
 } from "../shared/types.js";
+import {
+  buildQuotationIndex,
+  locateQuotation,
+  type QuotationIndex,
+} from "./quotation.js";
 export class HttpError extends Error {
   constructor(
     public status: number,
@@ -262,25 +267,6 @@ export function audit(
   w.audit.unshift({ id: randomUUID(), at: now(), actor, action, subjectId });
   w.audit = w.audit.slice(0, 10000);
 }
-/**
- * Quotations must be verbatim, but the same words are often copied with
- * different line breaks, non-breaking spaces or typographic quotation marks
- * (the live web page versus its collapsed capture, or a PDF with wrapped
- * lines). Matching ignores only those presentational differences; the
- * wording and punctuation still have to be exact.
- */
-export function normaliseQuote(value: string): string {
-  return value
-    .replace(/[\u2018\u2019\u201A\u201B\u2032]/g, "'")
-    .replace(/[\u201C\u201D\u201E\u201F\u2033]/g, '"')
-    .replace(/[\u00AD\u200B-\u200D\uFEFF]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-export function quoteFound(sourceText: string, quote: string): boolean {
-  const q = normaliseQuote(quote);
-  return !!q && normaliseQuote(sourceText).includes(q);
-}
 const shortTitle = (s: Source) =>
   s.title.length > 80 ? `${s.title.slice(0, 77)}…` : s.title;
 export function validateCitations(
@@ -288,6 +274,7 @@ export function validateCitations(
   orgId: string,
   kind: string,
   citations: Citation[],
+  quotationIndexes = new Map<string, QuotationIndex>(),
 ) {
   if (kind !== "proposal" && !citations.length)
     throw new HttpError(
@@ -303,7 +290,12 @@ export function validateCitations(
         422,
         `“${shortTitle(s)}” has no captured text, so it cannot supply a quotation. Images are not read automatically; cite a web page or text document, or record the point as a design proposal.`,
       );
-    if (!quoteFound(s.text, c.quote))
+    let quotationIndex = quotationIndexes.get(s.id);
+    if (!quotationIndex) {
+      quotationIndex = buildQuotationIndex(s.text);
+      quotationIndexes.set(s.id, quotationIndex);
+    }
+    if (locateQuotation(quotationIndex, c.quote) === null)
       throw new HttpError(
         422,
         `The passage was not found in “${shortTitle(s)}”. Copy it word for word from the source’s captured text; line breaks and spacing do not matter.`,
