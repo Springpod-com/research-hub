@@ -75,6 +75,7 @@ import { useFormCloseGuard } from "./components/form-close-guard";
 import { TabStrip, useScrolledPast } from "./components/tab-strip";
 import { WhatsThis } from "./components/whats-this";
 import { DismissibleNote } from "./components/dismissible-note";
+import { uploadFiles } from "./uploadBatch";
 import {
   ActiveRunBanner,
   RunCard,
@@ -136,6 +137,12 @@ type Field = {
   options?: [string, string][];
   hint?: string;
   validateUrl?: boolean;
+  multiple?: boolean;
+};
+type FormSubmitContext = {
+  files: File[];
+  setBusyLabel: (label: string) => void;
+  clearFiles: () => void;
 };
 function Pick({
   value,
@@ -253,7 +260,11 @@ function FormModal({
   description: string;
   fields: Field[];
   onClose: () => void;
-  onSubmit: (values: Record<string, string>, file?: File) => Promise<void>;
+  onSubmit: (
+    values: Record<string, string>,
+    file?: File,
+    context?: FormSubmitContext,
+  ) => Promise<void>;
   submitLabel?: string;
   busyLabel?: string | ((file?: File) => string);
   submitVariant?: "default" | "destructive";
@@ -263,18 +274,28 @@ function FormModal({
   const [values, setValues] = useState<Record<string, string>>(() =>
     Object.fromEntries(fields.map((f) => [f.name, f.value || ""])),
   );
-  const [file, setFile] = useState<File>();
+  const [files, setFiles] = useState<File[]>([]);
+  const [fileInputKey, setFileInputKey] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [activeBusyLabel, setActiveBusyLabel] = useState("");
+  const mounted = useRef(true);
+  useEffect(() => () => {
+    mounted.current = false;
+  }, []);
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const initialValues = useRef(values).current;
   const dirty =
-    !!file ||
+    files.length > 0 ||
     fields.some((field) => values[field.name] !== initialValues[field.name]);
   const closeGuard = useFormCloseGuard({ dirty, busy, onClose });
   async function submit(e: FormEvent) {
     e.preventDefault();
+    if (busy) return;
     setBusy(true);
+    setActiveBusyLabel(
+      typeof busyLabel === "function" ? busyLabel(files[0]) : busyLabel,
+    );
     setError("");
     setFieldErrors({});
     const submittedValues = { ...values };
@@ -292,12 +313,24 @@ function FormModal({
       return;
     }
     try {
-      await onSubmit(submittedValues, file);
-      onClose();
+      await onSubmit(submittedValues, files[0], {
+        files,
+        // A route change can unmount the dialog mid-batch; later files must
+        // not touch its state.
+        setBusyLabel: (label) => {
+          if (mounted.current) setActiveBusyLabel(label);
+        },
+        clearFiles: () => {
+          if (!mounted.current) return;
+          setFiles([]);
+          setFileInputKey((value) => value + 1);
+        },
+      });
+      if (mounted.current) onClose();
     } catch (e) {
-      setError((e as Error).message);
+      if (mounted.current) setError((e as Error).message);
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
   return (
@@ -333,13 +366,15 @@ function FormModal({
                 />
               ) : f.kind === "file" ? (
                 <U.Input
+                  key={fileInputKey}
                   id={`field-${f.name}`}
                   type="file"
                   required={f.required}
                   accept=".pdf,.docx,.txt,.md,.markdown,.png,.jpg,.jpeg,.zip"
+                  multiple={f.multiple}
                   autoFocus={index === 0}
                   onChange={(e) => {
-                    setFile(e.target.files?.[0]);
+                    setFiles(Array.from(e.target.files || []));
                     setError("");
                   }}
                 />
@@ -361,6 +396,7 @@ function FormModal({
                   id={`field-${f.name}`}
                   required={f.required}
                   value={values[f.name]}
+                  disabled={files.length > 1 && f.name === "title"}
                   autoFocus={index === 0}
                   aria-invalid={!!fieldErrors[f.name]}
                   aria-describedby={
@@ -385,6 +421,17 @@ function FormModal({
               {f.hint && (
                 <p className="text-p5 text-muted-foreground">{f.hint}</p>
               )}
+              {f.kind === "file" && files.length > 1 && (
+                <p className="text-p5 text-muted-foreground">
+                  {files.length} files selected
+                </p>
+              )}
+              {f.name === "title" && files.length > 1 && (
+                <p className="text-p5 text-muted-foreground">
+                  Titles come from the file names when several files are
+                  selected.
+                </p>
+              )}
             </div>
           ))}
           {render?.(values)}
@@ -403,11 +450,7 @@ function FormModal({
               Cancel
             </U.Button>
             <U.Button type="submit" variant={submitVariant} disabled={busy}>
-              {busy
-                ? typeof busyLabel === "function"
-                  ? busyLabel(file)
-                  : busyLabel
-                : submitLabel}
+              {busy ? activeBusyLabel : submitLabel}
             </U.Button>
           </U.DialogFooter>
         </form>
@@ -1420,6 +1463,7 @@ export function App({
               label: "Document or workplace image",
               kind: "file",
               required: true,
+              multiple: true,
             },
             {
               name: "caption",
@@ -1474,43 +1518,97 @@ export function App({
               ? "Importing images…"
               : "Uploading…"
           }
-          onSubmit={async (v, file) => {
-            if (!file) throw new Error("Choose a file.");
-            const form = new FormData();
-            form.append("file", file);
-            form.append("title", v.title);
-            form.append("caption", v.caption);
-            if (v.folder !== "auto") form.append("folder", v.folder);
-            if (v.rights !== "none") form.append("rights", v.rights);
-            if (
-              v.verification === "client-confirmed" &&
-              v.providedByName.trim()
-            ) {
-              form.append(
-                "providedBy",
-                JSON.stringify({
-                  name: v.providedByName,
-                  jobTitle: v.providedByJobTitle,
-                }),
-              );
-            }
-            if (v.roleId !== "all") form.append("roleId", v.roleId);
-            const result = await api<{
-              imported?: number;
-              skipped?: Array<{
+          onSubmit={async (v, file, context) => {
+            const files = context?.files || (file ? [file] : []);
+            if (!files.length) throw new Error("Choose a file.");
+            type ZipResult = {
+              imported: number;
+              sources: Source[];
+              skipped: Array<{
                 name: string;
                 reason: "not-image" | "duplicate";
               }>;
-            }>(`/organisations/${org!.id}/upload`, {
-              method: "POST",
-              body: form,
-            });
+            };
+            let position = 0;
+            let singleResult: Source | ZipResult | undefined;
+            let zipImported = 0;
+            let zipSkipped = 0;
+            const result = await uploadFiles<Source>(
+              files,
+              v,
+              async (current, meta) => {
+                position++;
+                if (files.length > 1)
+                  context?.setBusyLabel(
+                    `Uploading ${position} of ${files.length}…`,
+                  );
+                const form = new FormData();
+                form.append("file", current);
+                form.append("title", meta.title);
+                form.append("caption", meta.caption);
+                if (meta.folder !== "auto") form.append("folder", meta.folder);
+                if (meta.rights !== "none") form.append("rights", meta.rights);
+                if (meta.tier) form.append("tier", meta.tier);
+                if (meta.tierReason) form.append("tierReason", meta.tierReason);
+                if (
+                  meta.verification === "client-confirmed" &&
+                  meta.providedByName.trim()
+                ) {
+                  form.append(
+                    "providedBy",
+                    JSON.stringify({
+                      name: meta.providedByName,
+                      jobTitle: meta.providedByJobTitle,
+                    }),
+                  );
+                }
+                if (meta.roleId !== "all") form.append("roleId", meta.roleId);
+                const response = await api<Source | ZipResult>(
+                  `/organisations/${org!.id}/upload`,
+                  {
+                    method: "POST",
+                    body: form,
+                  },
+                );
+                if (files.length === 1) singleResult = response;
+                if ("imported" in response) {
+                  zipImported += response.imported;
+                  zipSkipped += response.skipped.length;
+                }
+                return response;
+              },
+            );
             await reload();
-            if (result.imported === undefined) {
+            const successfulFiles = files.length - result.failed.length;
+            const zipSummary =
+              zipImported || zipSkipped
+                ? `${zipImported} ZIP images imported${zipSkipped ? ` · ${zipSkipped} skipped` : ""}`
+                : undefined;
+            if (result.failed.length) {
+              context?.clearFiles();
+              if (successfulFiles)
+                U.toast({
+                  title: `Uploaded ${successfulFiles} ${successfulFiles === 1 ? "file" : "files"}`,
+                  description: zipSummary,
+                });
+              throw new Error(
+                result.failed
+                  .map((failure) => `${failure.name} — ${failure.message}`)
+                  .join("; "),
+              );
+            }
+            if (files.length > 1) {
+              U.toast({
+                title: `Uploaded ${files.length} files`,
+                description: zipSummary,
+              });
+              return;
+            }
+            if (!singleResult || !("imported" in singleResult)) {
               U.toast({ title: "File uploaded" });
               return;
             }
-            const skipped = result.skipped || [];
+            const skipped = singleResult.skipped || [];
             const details = skipped
               .slice(0, 5)
               .map(
@@ -1520,7 +1618,7 @@ export function App({
             if (skipped.length > 5)
               details.push(`and ${skipped.length - 5} more`);
             U.toast({
-              title: `Imported ${result.imported} images${skipped.length ? ` · ${skipped.length} files skipped` : ""}`,
+              title: `Imported ${singleResult.imported} images${skipped.length ? ` · ${skipped.length} files skipped` : ""}`,
               description: details.length ? details.join(", ") : undefined,
             });
           }}
