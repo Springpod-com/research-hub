@@ -91,6 +91,7 @@ import {
   getClerkProxyHost,
 } from "./clerk-proxy.js";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import {
   confirmationMarkdown,
@@ -127,6 +128,65 @@ const rightsField = z.enum([
   "press-kit",
   "reference-only",
 ]);
+
+const imageSignature = (data: Buffer) => {
+  const png = data
+    .subarray(0, 8)
+    .equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  const jpeg = data[0] === 255 && data[1] === 216 && data[2] === 255;
+  return png ? "image/png" : jpeg ? "image/jpeg" : undefined;
+};
+
+async function scanUpload(data: Buffer, name?: string): Promise<boolean> {
+  if (process.env.UPLOAD_SCAN_COMMAND) {
+    return await new Promise<boolean>((resolve, reject) => {
+      const child = spawn(
+        process.env.UPLOAD_SCAN_COMMAND!,
+        ["--no-summary", "-"],
+        { stdio: ["pipe", "ignore", "ignore"] },
+      );
+      const timer = setTimeout(() => {
+        child.kill();
+        reject(new HttpError(503, "File scanning timed out."));
+      }, 30000);
+      child.on("error", () => {
+        clearTimeout(timer);
+        reject(new HttpError(503, "File scanner unavailable."));
+      });
+      child.on("close", (code) => {
+        clearTimeout(timer);
+        if (code === 0) resolve(true);
+        else if (code === 1)
+          reject(
+            new HttpError(
+              422,
+              name
+                ? `${name} did not pass the upload scan.`
+                : "File did not pass the upload scan.",
+            ),
+          );
+        else reject(new HttpError(503, "File scanner unavailable."));
+      });
+      child.stdin.on("error", () => {});
+      child.stdin.end(data);
+    });
+  } else if (process.env.NODE_ENV === "production")
+    throw new HttpError(
+      503,
+      "An upload scanner must be configured before production file uploads.",
+    );
+  return false;
+}
+
+const safeArchiveFilename = (value: string) =>
+  value
+    .normalize("NFC")
+    .replace(
+      /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g,
+      "",
+    )
+    .trim()
+    .slice(0, 255) || "image";
 const providedByField = z.object({
   name: z.string().trim().min(1).max(200),
   jobTitle: z.string().trim().max(200),
@@ -327,7 +387,17 @@ export function createApp(store: Store, options: AppOptions = {}) {
     m: Member,
     finding: Finding,
     changes: Partial<
-      Pick<Finding, "claim" | "kind" | "citations" | "review" | "rationale" | "slot" | "parts" | "fields">
+      Pick<
+        Finding,
+        | "claim"
+        | "kind"
+        | "citations"
+        | "review"
+        | "rationale"
+        | "slot"
+        | "parts"
+        | "fields"
+      >
     >,
     expectedVersion: unknown,
     withoutVersion = false,
@@ -336,17 +406,9 @@ export function createApp(store: Store, options: AppOptions = {}) {
     const citations = changes.citations ?? finding.citations;
     const slot = changes.slot ?? finding.slot;
     const fields = changes.fields ?? finding.fields;
-    structuredFinding(
-      w.sources,
-      finding.orgId,
-      slot,
-      fields,
-      citations,
-      w,
-    );
+    structuredFinding(w.sources, finding.orgId, slot, fields, citations, w);
     const inventedMeasurement =
-      slot === "case.measurement" &&
-      fields?.origin === "invented and declared";
+      slot === "case.measurement" && fields?.origin === "invented and declared";
     if (!inventedMeasurement)
       validateCitations(w.sources, finding.orgId, kind, citations);
     if (withoutVersion) {
@@ -467,9 +529,16 @@ export function createApp(store: Store, options: AppOptions = {}) {
           touch(item, req.body.version);
           const { factChecker, brand, mayUse, mustNotSay, ...changes } = data;
           Object.assign(item, changes);
-          for (const [key, value] of Object.entries({ factChecker, brand, mayUse, mustNotSay }))
-            if (value === null) delete (item as unknown as Record<string, unknown>)[key];
-            else if (value !== undefined) (item as unknown as Record<string, unknown>)[key] = value;
+          for (const [key, value] of Object.entries({
+            factChecker,
+            brand,
+            mayUse,
+            mustNotSay,
+          }))
+            if (value === null)
+              delete (item as unknown as Record<string, unknown>)[key];
+            else if (value !== undefined)
+              (item as unknown as Record<string, unknown>)[key] = value;
           audit(
             w,
             m.userId,
@@ -510,11 +579,19 @@ export function createApp(store: Store, options: AppOptions = {}) {
           const role = get(w.roles, String(req.params.id));
           validateRoleReferences(w.sources, role.orgId, data.interview);
           touch(role, req.body.version);
-          const { standard, ncsUrl, professionalBody, interview, ...changes } = data;
+          const { standard, ncsUrl, professionalBody, interview, ...changes } =
+            data;
           Object.assign(role, changes);
-          for (const [key, value] of Object.entries({ standard, ncsUrl, professionalBody, interview }))
-            if (value === null) delete (role as unknown as Record<string, unknown>)[key];
-            else if (value !== undefined) (role as unknown as Record<string, unknown>)[key] = value;
+          for (const [key, value] of Object.entries({
+            standard,
+            ncsUrl,
+            professionalBody,
+            interview,
+          }))
+            if (value === null)
+              delete (role as unknown as Record<string, unknown>)[key];
+            else if (value !== undefined)
+              (role as unknown as Record<string, unknown>)[key] = value;
           audit(w, m.userId, "Role updated", role.id);
           return role;
         }),
@@ -814,8 +891,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
       if (data.kind === "note") {
         data.folder ||= "01-organisation";
         data.tier ??= 2;
-        data.tierReason ||=
-          `Team note; extracted from ${data.extractedFrom}`;
+        data.tierReason ||= `Team note; extracted from ${data.extractedFrom}`;
       }
       requireTierReason(data);
       if (data.url && !/^https?:\/\//.test(data.url))
@@ -987,13 +1063,79 @@ export function createApp(store: Store, options: AppOptions = {}) {
       );
     }),
   );
+  const boundedMemoryStorage: multer.StorageEngine = {
+    _handleFile(_req, file, done) {
+      const cap = file.originalname.toLowerCase().endsWith(".zip")
+        ? 100 * 1024 * 1024
+        : 10 * 1024 * 1024;
+      let chunks: Buffer[] = [];
+      let size = 0;
+      let complete = false;
+      const detach = () => {
+        file.stream.off("data", onData);
+        file.stream.off("end", onEnd);
+        file.stream.off("error", onError);
+      };
+      const fail = (error: Error) => {
+        if (complete) return;
+        complete = true;
+        detach();
+        // Release what was buffered before the request is drained, so a slow
+        // oversized upload cannot keep its bytes resident until it ends.
+        chunks = [];
+        file.stream.resume();
+        done(error);
+      };
+      const onData = (chunk: Buffer) => {
+        size += chunk.length;
+        if (size > cap) {
+          fail(new multer.MulterError("LIMIT_FILE_SIZE", file.fieldname));
+          return;
+        }
+        chunks.push(chunk);
+      };
+      const onError = (error: Error) => fail(error);
+      const onEnd = () => {
+        if (complete) return;
+        complete = true;
+        detach();
+        const buffer = Buffer.concat(chunks);
+        chunks = [];
+        done(null, { buffer, size });
+      };
+      file.stream.on("data", onData);
+      file.stream.on("error", onError);
+      file.stream.on("end", onEnd);
+    },
+    _removeFile(_req, file, done) {
+      delete (file as { buffer?: Buffer }).buffer;
+      done(null);
+    },
+  };
   const upload = multer({
-    storage: multer.memoryStorage(),
-    limits: { fileSize: 10 * 1024 * 1024, files: 1, fields: 10 },
+    storage: boundedMemoryStorage,
+    limits: { files: 1, fields: 10 },
+    fileFilter: (req, file, done) => {
+      (req as Request & { uploadName?: string }).uploadName = file.originalname;
+      done(null, true);
+    },
   });
+  const receiveUpload: RequestHandler = (req, res, next) => {
+    upload.single("file")(req, res, (error) => {
+      if (
+        error instanceof multer.MulterError &&
+        error.code === "LIMIT_FILE_SIZE" &&
+        path
+          .extname((req as Request & { uploadName?: string }).uploadName || "")
+          .toLowerCase() === ".zip"
+      )
+        return next(new HttpError(413, "ZIP files can be up to 100 MB."));
+      next(error);
+    });
+  };
   app.post(
     "/api/organisations/:id/upload",
-    upload.single("file"),
+    receiveUpload,
     handler(async (req, res) => {
       const f = req.file;
       if (!f) throw new HttpError(422, "Choose a file.");
@@ -1044,44 +1186,152 @@ export function createApp(store: Store, options: AppOptions = {}) {
         ".png",
         ".jpg",
         ".jpeg",
+        ".zip",
       ];
       if (!allowed.includes(ext))
         throw new HttpError(
           422,
-          "Use PDF, DOCX, TXT, Markdown, PNG or JPEG, up to 10 MB.",
+          "Use PDF, DOCX, TXT, Markdown, PNG or JPEG up to 10 MB, or a ZIP up to 100 MB.",
         );
-      if (process.env.UPLOAD_SCAN_COMMAND) {
-        await new Promise<void>((resolve, reject) => {
-          const child = spawn(
-            process.env.UPLOAD_SCAN_COMMAND!,
-            ["--no-summary", "-"],
-            { stdio: ["pipe", "ignore", "ignore"] },
+      if (ext === ".zip") {
+        if (f.buffer.subarray(0, 2).toString() !== "PK")
+          throw new HttpError(422, "This file is not a valid ZIP.");
+        const { default: JSZip } = await import("jszip");
+        let zip;
+        try {
+          zip = await JSZip.loadAsync(f.buffer);
+        } catch {
+          throw new HttpError(422, "This file is not a valid ZIP.");
+        }
+        const entries = Object.values(zip.files);
+        if (entries.length > 500)
+          throw new HttpError(
+            422,
+            "ZIP files can contain at most 500 entries.",
           );
-          const timer = setTimeout(() => {
-            child.kill();
-            reject(new HttpError(503, "File scanning timed out."));
-          }, 30000);
-          child.on("error", () => {
-            clearTimeout(timer);
-            reject(new HttpError(503, "File scanner unavailable."));
+        const kept: Array<{
+          data: Buffer;
+          name: string;
+          filename: string;
+          mime: "image/png" | "image/jpeg";
+        }> = [];
+        const eligible: Array<{
+          entry: (typeof entries)[number];
+          filename: string;
+        }> = [];
+        const skipped: Array<{
+          name: string;
+          reason: "not-image" | "duplicate";
+        }> = [];
+        let expandedTotal = 0;
+        for (const entry of entries) {
+          const normalised = entry.name.replaceAll("\\", "/");
+          const parts = normalised.split("/").filter(Boolean);
+          const rawFilename = parts.at(-1) || "";
+          if (
+            entry.dir ||
+            parts.includes("__MACOSX") ||
+            parts.some((part) => part.startsWith(".")) ||
+            rawFilename.toLowerCase() === "thumbs.db"
+          )
+            continue;
+          if (
+            ![".png", ".jpg", ".jpeg"].includes(
+              path.extname(rawFilename).toLowerCase(),
+            )
+          ) {
+            skipped.push({ name: entry.name, reason: "not-image" });
+            continue;
+          }
+          const size = Number((entry as any)._data?.uncompressedSize || 0);
+          if (size > 10 * 1024 * 1024)
+            throw new HttpError(
+              422,
+              `${entry.name} exceeds the 10 MB uncompressed image limit.`,
+            );
+          expandedTotal += size;
+          if (expandedTotal > 200 * 1024 * 1024)
+            throw new HttpError(
+              422,
+              "The ZIP's eligible images can be at most 200 MB uncompressed.",
+            );
+          eligible.push({
+            entry,
+            filename: safeArchiveFilename(rawFilename),
           });
-          child.on("close", (code) => {
-            clearTimeout(timer);
-            // clamscan/clamdscan convention: 0 clean, 1 threat found, other
-            // codes are scanner errors (for example the daemon is not running).
-            if (code === 0) resolve();
-            else if (code === 1)
-              reject(new HttpError(422, "File did not pass the upload scan."));
-            else reject(new HttpError(503, "File scanner unavailable."));
-          });
-          child.stdin.on("error", () => {});
-          child.stdin.end(f.buffer);
+          if (eligible.length > 200)
+            throw new HttpError(422, "A ZIP can import at most 200 images.");
+        }
+        const hashes = new Set<string>();
+        for (const { entry, filename } of eligible) {
+          const data = await entry.async("nodebuffer");
+          const mime = imageSignature(data);
+          if (!mime) {
+            skipped.push({ name: entry.name, reason: "not-image" });
+            continue;
+          }
+          const hash = createHash("sha256").update(data).digest("hex");
+          if (hashes.has(hash)) {
+            skipped.push({ name: entry.name, reason: "duplicate" });
+            continue;
+          }
+          hashes.add(hash);
+          kept.push({ data, name: entry.name, filename, mime });
+        }
+        if (!kept.length)
+          throw new HttpError(422, "The ZIP contains no PNG or JPEG images.");
+        const scanVerdicts: boolean[] = [];
+        for (const image of kept)
+          scanVerdicts.push(await scanUpload(image.data, image.name));
+        const sources: Source[] = kept.map((image) => ({
+          ...base(),
+          orgId,
+          roleIds: roleId ? [roleId] : [],
+          title:
+            path
+              .basename(image.filename, path.extname(image.filename))
+              .slice(0, 200) || "image",
+          kind: "image",
+          url: "",
+          text: "",
+          locator: "Workplace reference image",
+          permission: "awaiting-confirmation",
+          verification: "user-supplied",
+          suppliedBy: res.locals.member.name,
+          publishedAt: "",
+          retrievedAt: now(),
+          filename: image.filename,
+          mime: image.mime,
+          caption: String(req.body.caption || "").slice(0, 4000),
+          runIds: [],
+          ...uploadKnowledge,
+        }));
+        await mutate(req, res, async (w, m, db) => {
+          for (const [index, source] of sources.entries()) {
+            await Store.putFile(
+              db,
+              source.id,
+              kept[index].data,
+              scanVerdicts[index],
+            );
+            w.sources.push(source);
+            audit(w, m.userId, "Source uploaded", source.id);
+          }
+          audit(
+            w,
+            m.userId,
+            `Imported ${sources.length} images from ${f.originalname}`,
+            orgId,
+          );
         });
-      } else if (process.env.NODE_ENV === "production")
-        throw new HttpError(
-          503,
-          "An upload scanner must be configured before production file uploads.",
-        );
+        res.status(201).json({
+          imported: sources.length,
+          sources: sources.map(sourceView),
+          skipped,
+        });
+        return;
+      }
+      const scanClean = await scanUpload(f.buffer);
       let content = "";
       let locator = "Document text";
       let mime = "text/plain";
@@ -1127,17 +1377,13 @@ export function createApp(store: Store, options: AppOptions = {}) {
         mime = textTypes[ext];
       } else {
         image = true;
-        const png = f.buffer
-          .subarray(0, 8)
-          .equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
-        const jpg =
-          f.buffer[0] === 255 && f.buffer[1] === 216 && f.buffer[2] === 255;
-        if (!png && !jpg)
+        const imageMime = imageSignature(f.buffer);
+        if (!imageMime)
           throw new HttpError(
             422,
             "Image signature does not match PNG or JPEG.",
           );
-        mime = png ? "image/png" : "image/jpeg";
+        mime = imageMime;
         locator = "Workplace reference image";
       }
       const source: Source = {
@@ -1167,12 +1413,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
       await mutate(req, res, async (w, m, db) => {
         // The file itself is kept beside the workspace, not inside it, in the
         // same transaction as the source record.
-        await Store.putFile(
-          db,
-          source.id,
-          f.buffer,
-          !!process.env.UPLOAD_SCAN_COMMAND,
-        );
+        await Store.putFile(db, source.id, f.buffer, scanClean);
         w.sources.push(source);
         audit(w, m.userId, "Source uploaded", source.id);
       });
@@ -1330,7 +1571,10 @@ export function createApp(store: Store, options: AppOptions = {}) {
           if (data.transcriptSourceId) {
             const transcript = get(w.sources, data.transcriptSourceId);
             if (transcript.orgId !== s.orgId)
-              throw new HttpError(422, "The transcript source must belong to this organisation.");
+              throw new HttpError(
+                422,
+                "The transcript source must belong to this organisation.",
+              );
           }
           const effective = sourceView({
             ...s,
@@ -1442,7 +1686,12 @@ export function createApp(store: Store, options: AppOptions = {}) {
           citations: z.array(citation).max(12).optional(),
           review,
           rationale: optionalText,
-          slot: z.enum(["none", ...slots.map((slot) => slot.slot)] as [string, ...string[]]).optional(),
+          slot: z
+            .enum(["none", ...slots.map((slot) => slot.slot)] as [
+              string,
+              ...string[],
+            ])
+            .optional(),
           parts: z
             .array(z.enum(["day", "workflow", "matters", "call"]))
             .max(4)
@@ -1451,7 +1700,10 @@ export function createApp(store: Store, options: AppOptions = {}) {
             })
             .optional(),
           fields: z.record(z.string(), z.unknown()).optional(),
-          verified: z.object({ note: z.string().trim().max(2000).optional() }).nullable().optional(),
+          verified: z
+            .object({ note: z.string().trim().max(2000).optional() })
+            .nullable()
+            .optional(),
         })
         .parse(req.body);
       res.json(
@@ -1461,7 +1713,10 @@ export function createApp(store: Store, options: AppOptions = {}) {
             Object.prototype.hasOwnProperty.call(req.body, "verified") &&
             !["reviewer", "admin"].includes(m.role)
           )
-            throw new HttpError(403, "Only reviewers and administrators can verify a fact.");
+            throw new HttpError(
+              403,
+              "Only reviewers and administrators can verify a fact.",
+            );
           const { verified, ...changes } = data;
           const effectiveSlot = (changes.slot ?? f.slot) as Finding["slot"];
           const effectiveFields = changes.fields ?? f.fields;
@@ -1483,8 +1738,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
                 JSON.stringify(f.citations)) ||
             (changes.fields !== undefined &&
               JSON.stringify(changes.fields) !== JSON.stringify(f.fields)) ||
-            (changes.slot !== undefined &&
-              changes.slot !== (f.slot || "none"));
+            (changes.slot !== undefined && changes.slot !== (f.slot || "none"));
           reviewFinding(
             w,
             m,
@@ -1611,16 +1865,27 @@ export function createApp(store: Store, options: AppOptions = {}) {
   app.post(
     "/api/questions/:id/fact",
     handler(async (req, res) => {
-      const data = z.object({
-        slot: z.enum(["none", ...slots.map((slot) => slot.slot)] as [string, ...string[]]),
-        parts: z.array(z.enum(["day", "workflow", "matters", "call"])).max(4).default([]),
-        claim: z.string().trim().min(1).max(8000).optional(),
-      }).parse(req.body);
+      const data = z
+        .object({
+          slot: z.enum(["none", ...slots.map((slot) => slot.slot)] as [
+            string,
+            ...string[],
+          ]),
+          parts: z
+            .array(z.enum(["day", "workflow", "matters", "call"]))
+            .max(4)
+            .default([]),
+          claim: z.string().trim().min(1).max(8000).optional(),
+        })
+        .parse(req.body);
       res.status(201).json(
         await mutate(req, res, (w, m) => {
           const question = get(w.questions, String(req.params.id));
           if (question.status !== "answered" || !question.answer.trim())
-            throw new HttpError(422, "Only an answered question with a recorded answer can become a fact.");
+            throw new HttpError(
+              422,
+              "Only an answered question with a recorded answer can become a fact.",
+            );
           const source: Source = {
             ...base(),
             orgId: question.orgId,
@@ -1647,7 +1912,13 @@ export function createApp(store: Store, options: AppOptions = {}) {
             roleId: question.roleId,
             kind: "company" as const,
             claim: data.claim || question.answer,
-            citations: [{ sourceId: source.id, quote: question.answer, locator: source.locator }],
+            citations: [
+              {
+                sourceId: source.id,
+                quote: question.answer,
+                locator: source.locator,
+              },
+            ],
             rationale: `Recorded from the organisation's answer to question ${question.id}.`,
             review: "unreviewed" as const,
             slot: data.slot as Finding["slot"],
@@ -1658,7 +1929,10 @@ export function createApp(store: Store, options: AppOptions = {}) {
           w.sources.push(source);
           w.findings.push(finding);
           audit(w, m.userId, "Question answer converted to fact", finding.id);
-          return { source: sourceView(source), finding: findingView(w, finding) };
+          return {
+            source: sourceView(source),
+            finding: findingView(w, finding),
+          };
         }),
       );
     }),
@@ -1666,7 +1940,9 @@ export function createApp(store: Store, options: AppOptions = {}) {
   app.get(
     "/api/orgs/:orgId/sections",
     handler(async (req, res) => {
-      const query = z.object({ roleId: z.string().uuid().optional() }).parse(req.query);
+      const query = z
+        .object({ roleId: z.string().uuid().optional() })
+        .parse(req.query);
       const response: SectionsResponse = sectionsView(
         await store.read(),
         String(req.params.orgId),
@@ -1772,7 +2048,9 @@ export function createApp(store: Store, options: AppOptions = {}) {
         `attachment; filename="${packZipName(pack).replace(/\.zip$/, ".docx")}"`,
       );
       res
-        .type("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        .type(
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
         .send(await packDocx(pack));
     }),
   );
@@ -1833,7 +2111,17 @@ export function createApp(store: Store, options: AppOptions = {}) {
         .object({
           roleId: z.string().uuid().optional(),
           tier: z.enum(["economy", "power", "max"]),
-          sections: z.array(z.enum(sections.map((section) => section.section) as [string, ...string[]])).max(6).optional(),
+          sections: z
+            .array(
+              z.enum(
+                sections.map((section) => section.section) as [
+                  string,
+                  ...string[],
+                ],
+              ),
+            )
+            .max(6)
+            .optional(),
           sourceIds: z.array(z.string().uuid()).max(16).optional(),
           crawl: z.boolean().optional(),
         })
@@ -1869,11 +2157,16 @@ export function createApp(store: Store, options: AppOptions = {}) {
               if (
                 !source ||
                 source.orgId !== orgId ||
-                (data.roleId && source.roleIds.length && !source.roleIds.includes(data.roleId)) ||
+                (data.roleId &&
+                  source.roleIds.length &&
+                  !source.roleIds.includes(data.roleId)) ||
                 !source.text.trim() ||
                 !!source.error
               )
-                throw new HttpError(422, "Every selected source must be readable and belong to this organisation and role.");
+                throw new HttpError(
+                  422,
+                  "Every selected source must be readable and belong to this organisation and role.",
+                );
             }
           if (!providers(w)[data.tier])
             throw new HttpError(

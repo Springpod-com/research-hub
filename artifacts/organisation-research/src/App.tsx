@@ -245,6 +245,7 @@ function FormModal({
   onClose,
   onSubmit,
   submitLabel = "Save",
+  busyLabel = "Saving…",
   submitVariant = "default",
   render,
 }: {
@@ -254,6 +255,7 @@ function FormModal({
   onClose: () => void;
   onSubmit: (values: Record<string, string>, file?: File) => Promise<void>;
   submitLabel?: string;
+  busyLabel?: string | ((file?: File) => string);
   submitVariant?: "default" | "destructive";
   /** Extra content rendered below the fields, given the live values. */
   render?: (values: Record<string, string>) => ReactNode;
@@ -334,7 +336,7 @@ function FormModal({
                   id={`field-${f.name}`}
                   type="file"
                   required={f.required}
-                  accept=".pdf,.docx,.txt,.md,.markdown,.png,.jpg,.jpeg"
+                  accept=".pdf,.docx,.txt,.md,.markdown,.png,.jpg,.jpeg,.zip"
                   autoFocus={index === 0}
                   onChange={(e) => {
                     setFile(e.target.files?.[0]);
@@ -401,7 +403,11 @@ function FormModal({
               Cancel
             </U.Button>
             <U.Button type="submit" variant={submitVariant} disabled={busy}>
-              {busy ? "Saving…" : submitLabel}
+              {busy
+                ? typeof busyLabel === "function"
+                  ? busyLabel(file)
+                  : busyLabel
+                : submitLabel}
             </U.Button>
           </U.DialogFooter>
         </form>
@@ -788,7 +794,10 @@ export function App({
                 ? "named"
                 : "unknown",
             kind: "select",
-            options: [["unknown", "Not yet known"], ["named", "Named contact"]],
+            options: [
+              ["unknown", "Not yet known"],
+              ["named", "Named contact"],
+            ],
           },
           {
             name: "factCheckerName",
@@ -801,16 +810,34 @@ export function App({
             label: "Who at the organisation checks facts — job title",
             value: o.factChecker?.jobTitle,
           },
-          { name: "brandGuidelines", label: "Brand guidelines and where they live", value: o.brand?.guidelines, kind: "textarea" },
-          { name: "brandLogo", label: "Logo rules", value: o.brand?.logo, kind: "textarea" },
-          { name: "brandPhotography", label: "Photography", value: o.brand?.photography, kind: "textarea" },
-          { name: "brandHouseStyle", label: "House style", value: o.brand?.houseStyle, kind: "textarea" },
+          {
+            name: "brandGuidelines",
+            label: "Brand guidelines and where they live",
+            value: o.brand?.guidelines,
+            kind: "textarea",
+          },
+          {
+            name: "brandLogo",
+            label: "Logo rules",
+            value: o.brand?.logo,
+            kind: "textarea",
+          },
+          {
+            name: "brandPhotography",
+            label: "Photography",
+            value: o.brand?.photography,
+            kind: "textarea",
+          },
+          {
+            name: "brandHouseStyle",
+            label: "House style",
+            value: o.brand?.houseStyle,
+            kind: "textarea",
+          },
           ...(["mayUse", "mustNotSay"] as const).flatMap((key) => {
             const items = [...(o[key] || []), { text: "", sourceId: "none" }];
             const heading =
-              key === "mayUse"
-                ? "Names we may use"
-                : "Things we must not say";
+              key === "mayUse" ? "Names we may use" : "Things we must not say";
             return items.flatMap((item, index): Field[] => [
               {
                 name: `${key}Text${index}`,
@@ -831,8 +858,7 @@ export function App({
                   ...organisationSources
                     .filter((source) => source.tier === 1)
                     .map(
-                      (source) =>
-                        [source.id, source.title] as [string, string],
+                      (source) => [source.id, source.title] as [string, string],
                     ),
                 ],
               },
@@ -865,23 +891,114 @@ export function App({
             kind: "textarea",
             hint: "What can this person decide, and when must they ask for help?",
           },
-          { name: "standardName", label: "Apprenticeship standard — name", value: r.standard?.name },
-          { name: "standardLevel", label: "Apprenticeship standard — level", value: r.standard?.level },
-          { name: "standardDuration", label: "Apprenticeship standard — duration", value: r.standard?.duration },
-          { name: "standardUrl", label: "Apprenticeship standard — URL", value: r.standard?.url, validateUrl: true },
-          { name: "assessmentPlanUrl", label: "Assessment plan URL", value: r.standard?.assessmentPlanUrl, validateUrl: true },
-          { name: "ncsUrl", label: "National Careers Service profile URL", value: r.ncsUrl, validateUrl: true },
-          { name: "bodyName", label: "Professional body — name", value: r.professionalBody?.name },
-          { name: "registrationRoute", label: "Professional body — registration route", value: r.professionalBody?.registrationRoute },
-          { name: "frameworkUrl", label: "Professional body — framework URL", value: r.professionalBody?.frameworkUrl, validateUrl: true },
-          { name: "interviewWho", label: "Interview — who", value: r.interview?.who },
-          { name: "interviewJobTitle", label: "Interview — job title", value: r.interview?.jobTitle },
-          { name: "timeInRole", label: "Interview — time in role", value: r.interview?.timeInRole },
-          { name: "mayBeNamed", label: "Interview — may be named", value: r.interview?.mayBeNamed ? "true" : "false", kind: "select", options: [["false", "No"], ["true", "Yes"]] },
-          { name: "interviewDate", label: "Interview — date", value: r.interview?.date },
-          { name: "interviewHow", label: "Interview — how it took place", value: r.interview?.how },
-          { name: "recordingSourceId", label: "Interview — recording source", value: r.interview?.recordingSourceId || "none", kind: "select", options: [["none", "Not selected"], ...organisationSources.map((source) => [source.id, source.title] as [string, string])] },
-          { name: "transcriptSourceId", label: "Interview — transcript source", value: r.interview?.transcriptSourceId || "none", kind: "select", options: [["none", "Not selected"], ...organisationSources.map((source) => [source.id, source.title] as [string, string])] },
+          {
+            name: "standardName",
+            label: "Apprenticeship standard — name",
+            value: r.standard?.name,
+          },
+          {
+            name: "standardLevel",
+            label: "Apprenticeship standard — level",
+            value: r.standard?.level,
+          },
+          {
+            name: "standardDuration",
+            label: "Apprenticeship standard — duration",
+            value: r.standard?.duration,
+          },
+          {
+            name: "standardUrl",
+            label: "Apprenticeship standard — URL",
+            value: r.standard?.url,
+            validateUrl: true,
+          },
+          {
+            name: "assessmentPlanUrl",
+            label: "Assessment plan URL",
+            value: r.standard?.assessmentPlanUrl,
+            validateUrl: true,
+          },
+          {
+            name: "ncsUrl",
+            label: "National Careers Service profile URL",
+            value: r.ncsUrl,
+            validateUrl: true,
+          },
+          {
+            name: "bodyName",
+            label: "Professional body — name",
+            value: r.professionalBody?.name,
+          },
+          {
+            name: "registrationRoute",
+            label: "Professional body — registration route",
+            value: r.professionalBody?.registrationRoute,
+          },
+          {
+            name: "frameworkUrl",
+            label: "Professional body — framework URL",
+            value: r.professionalBody?.frameworkUrl,
+            validateUrl: true,
+          },
+          {
+            name: "interviewWho",
+            label: "Interview — who",
+            value: r.interview?.who,
+          },
+          {
+            name: "interviewJobTitle",
+            label: "Interview — job title",
+            value: r.interview?.jobTitle,
+          },
+          {
+            name: "timeInRole",
+            label: "Interview — time in role",
+            value: r.interview?.timeInRole,
+          },
+          {
+            name: "mayBeNamed",
+            label: "Interview — may be named",
+            value: r.interview?.mayBeNamed ? "true" : "false",
+            kind: "select",
+            options: [
+              ["false", "No"],
+              ["true", "Yes"],
+            ],
+          },
+          {
+            name: "interviewDate",
+            label: "Interview — date",
+            value: r.interview?.date,
+          },
+          {
+            name: "interviewHow",
+            label: "Interview — how it took place",
+            value: r.interview?.how,
+          },
+          {
+            name: "recordingSourceId",
+            label: "Interview — recording source",
+            value: r.interview?.recordingSourceId || "none",
+            kind: "select",
+            options: [
+              ["none", "Not selected"],
+              ...organisationSources.map(
+                (source) => [source.id, source.title] as [string, string],
+              ),
+            ],
+          },
+          {
+            name: "transcriptSourceId",
+            label: "Interview — transcript source",
+            value: r.interview?.transcriptSourceId || "none",
+            kind: "select",
+            options: [
+              ["none", "Not selected"],
+              ...organisationSources.map(
+                (source) => [source.id, source.title] as [string, string],
+              ),
+            ],
+          },
         ] satisfies Field[])
       : []),
   ];
@@ -927,8 +1044,13 @@ export function App({
           }
           onSubmit={async (v) => {
             const {
-              factCheckerStatus, factCheckerName, factCheckerJobTitle,
-              brandGuidelines, brandLogo, brandPhotography, brandHouseStyle,
+              factCheckerStatus,
+              factCheckerName,
+              factCheckerJobTitle,
+              brandGuidelines,
+              brandLogo,
+              brandPhotography,
+              brandHouseStyle,
               ...base
             } = v;
             const attributed = (key: "mayUse" | "mustNotSay") =>
@@ -949,19 +1071,26 @@ export function App({
                 .filter((item) => item.text);
             const cleanBase = Object.fromEntries(
               Object.entries(base).filter(
-                ([name]) =>
-                  !/^(mayUse|mustNotSay)(Text|Source)\d+$/.test(name),
+                ([name]) => !/^(mayUse|mustNotSay)(Text|Source)\d+$/.test(name),
               ),
             );
-            const organisationValues = m ? {
-              ...cleanBase,
-              factChecker: factCheckerStatus === "named"
-                ? { name: factCheckerName, jobTitle: factCheckerJobTitle }
-                : { name: "not yet known", jobTitle: "" },
-              brand: { guidelines: brandGuidelines, logo: brandLogo, photography: brandPhotography, houseStyle: brandHouseStyle },
-              mayUse: attributed("mayUse"),
-              mustNotSay: attributed("mustNotSay"),
-            } : base;
+            const organisationValues = m
+              ? {
+                  ...cleanBase,
+                  factChecker:
+                    factCheckerStatus === "named"
+                      ? { name: factCheckerName, jobTitle: factCheckerJobTitle }
+                      : { name: "not yet known", jobTitle: "" },
+                  brand: {
+                    guidelines: brandGuidelines,
+                    logo: brandLogo,
+                    photography: brandPhotography,
+                    houseStyle: brandHouseStyle,
+                  },
+                  mayUse: attributed("mayUse"),
+                  mustNotSay: attributed("mustNotSay"),
+                }
+              : base;
             const created = m
               ? await patch(`/organisations/${m.id}`, {
                   ...organisationValues,
@@ -985,26 +1114,66 @@ export function App({
           onClose={close}
           onSubmit={async (v) => {
             const {
-              standardName, standardLevel, standardDuration, standardUrl, assessmentPlanUrl,
-              bodyName, registrationRoute, frameworkUrl,
-              interviewWho, interviewJobTitle, timeInRole, mayBeNamed, interviewDate,
-              interviewHow, recordingSourceId, transcriptSourceId, ...base
+              standardName,
+              standardLevel,
+              standardDuration,
+              standardUrl,
+              assessmentPlanUrl,
+              bodyName,
+              registrationRoute,
+              frameworkUrl,
+              interviewWho,
+              interviewJobTitle,
+              timeInRole,
+              mayBeNamed,
+              interviewDate,
+              interviewHow,
+              recordingSourceId,
+              transcriptSourceId,
+              ...base
             } = v;
-            const roleValues = m ? {
-              ...base,
-              standard: standardName.trim() ? { name: standardName, level: standardLevel, duration: standardDuration, url: standardUrl, assessmentPlanUrl } : null,
-              professionalBody: bodyName.trim() ? { name: bodyName, registrationRoute, frameworkUrl } : null,
-              interview: interviewWho.trim() ? {
-                who: interviewWho, jobTitle: interviewJobTitle, timeInRole,
-                mayBeNamed: mayBeNamed === "true", date: interviewDate, how: interviewHow,
-                recordingSourceId: recordingSourceId === "none" ? undefined : recordingSourceId,
-                transcriptSourceId: transcriptSourceId === "none" ? undefined : transcriptSourceId,
-              } : null,
-            } : base;
+            const roleValues = m
+              ? {
+                  ...base,
+                  standard: standardName.trim()
+                    ? {
+                        name: standardName,
+                        level: standardLevel,
+                        duration: standardDuration,
+                        url: standardUrl,
+                        assessmentPlanUrl,
+                      }
+                    : null,
+                  professionalBody: bodyName.trim()
+                    ? { name: bodyName, registrationRoute, frameworkUrl }
+                    : null,
+                  interview: interviewWho.trim()
+                    ? {
+                        who: interviewWho,
+                        jobTitle: interviewJobTitle,
+                        timeInRole,
+                        mayBeNamed: mayBeNamed === "true",
+                        date: interviewDate,
+                        how: interviewHow,
+                        recordingSourceId:
+                          recordingSourceId === "none"
+                            ? undefined
+                            : recordingSourceId,
+                        transcriptSourceId:
+                          transcriptSourceId === "none"
+                            ? undefined
+                            : transcriptSourceId,
+                      }
+                    : null,
+                }
+              : base;
             return save(
               () =>
                 m
-                  ? patch(`/roles/${m.id}`, { ...roleValues, version: m.version })
+                  ? patch(`/roles/${m.id}`, {
+                      ...roleValues,
+                      version: m.version,
+                    })
                   : post(`/organisations/${org!.id}/roles`, roleValues),
               m ? "Role updated" : "Role added",
             );
@@ -1187,16 +1356,16 @@ export function App({
                   verification: v.verification,
                   locator: v.locator,
                   roleIds: v.roleId === "all" ? [] : [v.roleId],
-                folder: v.folder === "auto" ? undefined : v.folder,
-                rights: v.rights === "none" ? undefined : v.rights,
-                providedBy:
-                  v.verification === "client-confirmed" &&
-                  v.providedByName.trim()
-                    ? {
-                        name: v.providedByName,
-                        jobTitle: v.providedByJobTitle,
-                      }
-                    : undefined,
+                  folder: v.folder === "auto" ? undefined : v.folder,
+                  rights: v.rights === "none" ? undefined : v.rights,
+                  providedBy:
+                    v.verification === "client-confirmed" &&
+                    v.providedByName.trim()
+                      ? {
+                          name: v.providedByName,
+                          jobTitle: v.providedByJobTitle,
+                        }
+                      : undefined,
                 }),
               "Source recorded",
             )
@@ -1243,7 +1412,7 @@ export function App({
       return (
         <FormModal
           title="Upload source material"
-          description="PDF, DOCX, TXT, Markdown, PNG or JPEG. Maximum 10 MB. Uploaded assets start with unconfirmed usage permission."
+          description="PDF, DOCX, TXT, Markdown, PNG or JPEG up to 10 MB, or a ZIP of PNG/JPEG images up to 100 MB (200 images at most). Uploaded assets start with unconfirmed usage permission."
           fields={[
             { name: "title", label: "Title (optional)" },
             {
@@ -1300,6 +1469,11 @@ export function App({
           ]}
           onClose={close}
           submitLabel="Upload"
+          busyLabel={(file) =>
+            file?.name.toLowerCase().endsWith(".zip")
+              ? "Importing images…"
+              : "Uploading…"
+          }
           onSubmit={async (v, file) => {
             if (!file) throw new Error("Choose a file.");
             const form = new FormData();
@@ -1321,23 +1495,42 @@ export function App({
               );
             }
             if (v.roleId !== "all") form.append("roleId", v.roleId);
-            await save(
-              () =>
-                api(`/organisations/${org!.id}/upload`, {
-                  method: "POST",
-                  body: form,
-                }),
-              "File uploaded",
-            );
+            const result = await api<{
+              imported?: number;
+              skipped?: Array<{
+                name: string;
+                reason: "not-image" | "duplicate";
+              }>;
+            }>(`/organisations/${org!.id}/upload`, {
+              method: "POST",
+              body: form,
+            });
+            await reload();
+            if (result.imported === undefined) {
+              U.toast({ title: "File uploaded" });
+              return;
+            }
+            const skipped = result.skipped || [];
+            const details = skipped
+              .slice(0, 5)
+              .map(
+                (item) =>
+                  `${item.name} (${item.reason === "duplicate" ? "duplicate" : "not an image"})`,
+              );
+            if (skipped.length > 5)
+              details.push(`and ${skipped.length - 5} more`);
+            U.toast({
+              title: `Imported ${result.imported} images${skipped.length ? ` · ${skipped.length} files skipped` : ""}`,
+              description: details.length ? details.join(", ") : undefined,
+            });
           }}
         />
       );
-    if (modal.type === "note")
-      {
-        const noteSection = sharedSections.find(
-          (section) => section.folder === m.folder,
-        )!;
-        return (
+    if (modal.type === "note") {
+      const noteSection = sharedSections.find(
+        (section) => section.folder === m.folder,
+      )!;
+      return (
         <NoteForm
           folder={m.folder}
           roleScoped={noteSection.roleScoped}
@@ -1346,21 +1539,22 @@ export function App({
           onClose={close}
           onSubmit={async (value) => {
             await save(
-              () => post(`/organisations/${org!.id}/sources`, {
-                ...value,
-                kind: "note",
-                url: "",
-                locator: value.extractedFrom,
-                suppliedBy: session?.name || "",
-                verification: "public-source",
-                roleIds: noteRoleIds(value.folder, value.roleId),
-              }),
+              () =>
+                post(`/organisations/${org!.id}/sources`, {
+                  ...value,
+                  kind: "note",
+                  url: "",
+                  locator: value.extractedFrom,
+                  suppliedBy: session?.name || "",
+                  verification: "public-source",
+                  roleIds: noteRoleIds(value.folder, value.roleId),
+                }),
               "Research note saved",
             );
           }}
         />
       );
-      }
+    }
     if (modal.type === "finding")
       return (
         <RecordFactDialog
@@ -2190,8 +2384,7 @@ export function App({
     const shownFindings = findings.filter(
       (f) =>
         (filter === "all" || f.review === filter) &&
-        (sectionFilter === "all" ||
-          sectionOfSlot(f.slot) === sectionFilter) &&
+        (sectionFilter === "all" || sectionOfSlot(f.slot) === sectionFilter) &&
         (tierFilter === "all" || String(f.tier) === tierFilter) &&
         (sourceFilter === "all" ||
           f.citations.some((citation) => citation.sourceId === sourceFilter)) &&
@@ -2213,7 +2406,9 @@ export function App({
       section: Section,
       stage: "gathering" | "complete" | "reviewed",
     ) => {
-      const summary = sectionData?.sections.find((item) => item.section === section);
+      const summary = sectionData?.sections.find(
+        (item) => item.section === section,
+      );
       await run(
         () =>
           api(`/orgs/${org!.id}/sections/${section}/status`, {
@@ -2236,7 +2431,11 @@ export function App({
         <div className="flex flex-col sm:flex-row justify-between gap-4">
           <div className="flex flex-wrap gap-2">
             <U.Button
-              variant={evidenceMode === "sections" || evidenceMode === "folder" ? "secondary" : "ghost"}
+              variant={
+                evidenceMode === "sections" || evidenceMode === "folder"
+                  ? "secondary"
+                  : "ghost"
+              }
               onClick={() => setEvidenceMode("sections")}
             >
               Folders
@@ -2250,10 +2449,20 @@ export function App({
           </div>
           <U.Button
             variant="outline"
-            onClick={() => setModal({ type: evidenceMode === "findings" ? "finding" : "research" })}
+            onClick={() =>
+              setModal({
+                type: evidenceMode === "findings" ? "finding" : "research",
+              })
+            }
           >
-            {evidenceMode === "findings" ? <U.IconAdd size={20} /> : <U.IconMagicWand size={20} />}
-            {evidenceMode === "findings" ? "Record fact" : "Extract facts and evidence"}
+            {evidenceMode === "findings" ? (
+              <U.IconAdd size={20} />
+            ) : (
+              <U.IconMagicWand size={20} />
+            )}
+            {evidenceMode === "findings"
+              ? "Record fact"
+              : "Extract facts and evidence"}
           </U.Button>
         </div>
         {evidenceMode === "folder" ? (
@@ -2268,70 +2477,76 @@ export function App({
             <U.Alert role="alert">
               <U.AlertTitle>Folder not found</U.AlertTitle>
               <U.AlertDescription>
-                This folder is not available in the current role scope. Returning
-                to all folders.
+                This folder is not available in the current role scope.
+                Returning to all folders.
               </U.AlertDescription>
             </U.Alert>
           ) : (
-          <FolderView
-            summary={openFolder}
-            sources={sources.filter((item) => item.folder === openFolder.folder)}
-            findings={findings.filter((item) => sectionOfSlot(item.slot) === openFolder.section)}
-            canEditNote={canEditSectionNote(
-              openFolder,
-              !!session &&
-                ["researcher", "reviewer", "admin"].includes(session.role),
-              roleId === "all" ? undefined : roleId,
-            )}
-            noteEditHint={
-              openFolder.roleScoped &&
-              roleId === "all" &&
-              !!session &&
-              ["researcher", "reviewer", "admin"].includes(session.role)
-                ? "Choose a role to write a note for this folder."
-                : undefined
-            }
-            onBack={() => {
-              const next = new URLSearchParams(query);
-              next.delete("section");
-              next.delete("view");
-              replaceQuery(next);
-            }}
-            onSource={setSource}
-            onFill={(slot) => setModal({ type: "finding", item: { slot } })}
-            onFact={setEvidence}
-            onSaveNote={async (text) => {
-              if (openFolder.roleScoped && roleId === "all")
-                throw new Error("Choose a role to write a note for this folder.");
-              await run(
-                () =>
-                  api(
-                    `/orgs/${org!.id}/sections/${openFolder.section}/note`,
-                    {
-                      method: "PUT",
-                      body: JSON.stringify({
-                        text,
-                        roleId: openFolder.roleScoped ? roleId : undefined,
-                      }),
+            <FolderView
+              summary={openFolder}
+              sources={sources.filter(
+                (item) => item.folder === openFolder.folder,
+              )}
+              findings={findings.filter(
+                (item) => sectionOfSlot(item.slot) === openFolder.section,
+              )}
+              canEditNote={canEditSectionNote(
+                openFolder,
+                !!session &&
+                  ["researcher", "reviewer", "admin"].includes(session.role),
+                roleId === "all" ? undefined : roleId,
+              )}
+              noteEditHint={
+                openFolder.roleScoped &&
+                roleId === "all" &&
+                !!session &&
+                ["researcher", "reviewer", "admin"].includes(session.role)
+                  ? "Choose a role to write a note for this folder."
+                  : undefined
+              }
+              onBack={() => {
+                const next = new URLSearchParams(query);
+                next.delete("section");
+                next.delete("view");
+                replaceQuery(next);
+              }}
+              onSource={setSource}
+              onFill={(slot) => setModal({ type: "finding", item: { slot } })}
+              onFact={setEvidence}
+              onSaveNote={async (text) => {
+                if (openFolder.roleScoped && roleId === "all")
+                  throw new Error(
+                    "Choose a role to write a note for this folder.",
+                  );
+                await run(
+                  () =>
+                    api(
+                      `/orgs/${org!.id}/sections/${openFolder.section}/note`,
+                      {
+                        method: "PUT",
+                        body: JSON.stringify({
+                          text,
+                          roleId: openFolder.roleScoped ? roleId : undefined,
+                        }),
+                      },
+                    ),
+                  "Note saved",
+                  {
+                    rethrow: true,
+                    afterReload: async () => {
+                      const refreshed = await api<SectionsResponse>(
+                        `/orgs/${org!.id}/sections${
+                          roleId === "all"
+                            ? ""
+                            : `?roleId=${encodeURIComponent(roleId)}`
+                        }`,
+                      );
+                      setSectionData(refreshed);
                     },
-                  ),
-                "Note saved",
-                {
-                  rethrow: true,
-                  afterReload: async () => {
-                    const refreshed = await api<SectionsResponse>(
-                      `/orgs/${org!.id}/sections${
-                        roleId === "all"
-                          ? ""
-                          : `?roleId=${encodeURIComponent(roleId)}`
-                      }`,
-                    );
-                    setSectionData(refreshed);
                   },
-                },
-              );
-            }}
-          />
+                );
+              }}
+            />
           )
         ) : evidenceMode === "sections" ? (
           sectionsError ? (
@@ -2355,10 +2570,14 @@ export function App({
                 replaceQuery(next);
               }}
               onAdd={(section, kind) => {
-                const detail = sharedSections.find((item) => item.section === section)!;
+                const detail = sharedSections.find(
+                  (item) => item.section === section,
+                )!;
                 setModal({ type: kind, item: { folder: detail.folder } });
               }}
-              onStatus={(section, stage) => void setFolderStatus(section, stage)}
+              onStatus={(section, stage) =>
+                void setFolderStatus(section, stage)
+              }
               onExtract={(section) => {
                 const detail = sectionData?.sections.find(
                   (item) => item.section === section,
@@ -3666,7 +3885,8 @@ function EvidencePanel({
   const partsChanged =
     partsTouched && JSON.stringify(parts) !== JSON.stringify(f.parts || []);
   const fieldsChanged =
-    JSON.stringify(normaliseFactFields(fields)) !== JSON.stringify(f.fields || {});
+    JSON.stringify(normaliseFactFields(fields)) !==
+    JSON.stringify(f.fields || {});
   const tableSlot = !!slots.find((item) => item.slot === slot)?.table;
   const dirty =
     (!tableSlot && claim !== f.claim) ||
@@ -3712,7 +3932,10 @@ function EvidencePanel({
               slot={slot}
               values={fields}
               sources={sources.filter((source) => source.orgId === f.orgId)}
-              onChange={(value) => { setFields(value); setError(""); }}
+              onChange={(value) => {
+                setFields(value);
+                setError("");
+              }}
             />
           ) : (
             <div className="space-y-2">
@@ -3905,7 +4128,11 @@ function EvidencePanel({
             </U.Alert>
           )}
           <U.Button
-            disabled={busy || (!tableSlot && !claim.trim()) || (tableSlot && !factFieldsClaim(slot, fields))}
+            disabled={
+              busy ||
+              (!tableSlot && !claim.trim()) ||
+              (tableSlot && !factFieldsClaim(slot, fields))
+            }
             onClick={async () => {
               setBusy(true);
               setError("");
@@ -3922,8 +4149,7 @@ function EvidencePanel({
                     : {}),
                   ...(canVerify &&
                   (verified !== !!f.verified ||
-                    (verified &&
-                      verificationNote !== (f.verified?.note || "")))
+                    (verified && verificationNote !== (f.verified?.note || "")))
                     ? {
                         verified: verified
                           ? { note: verificationNote.trim() || undefined }
@@ -3994,10 +4220,8 @@ function SourcePanel({
   const [busy, setBusy] = useState(false);
   const [image, setImage] = useState("");
   const [refresh, setRefresh] = useState<RefreshResult>();
-  const folderChanged =
-    folderTouched && folder !== (s.folder || "auto");
-  const rightsChanged =
-    rightsTouched && rights !== (s.rights || "none");
+  const folderChanged = folderTouched && folder !== (s.folder || "auto");
+  const rightsChanged = rightsTouched && rights !== (s.rights || "none");
   const dirty =
     permission !== s.permission ||
     caption !== (s.caption || "") ||
@@ -4263,8 +4487,7 @@ function SourcePanel({
                     : {}),
                   ...(rightsChanged
                     ? {
-                        rights:
-                          rights === "none" ? null : (rights as Rights),
+                        rights: rights === "none" ? null : (rights as Rights),
                       }
                     : {}),
                 });

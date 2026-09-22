@@ -8,7 +8,7 @@ existing JSON keys never change. British English everywhere a person reads.
 ## Server-computed fields (filled on every read, never stored by the client)
 
 - `Source.folder` when absent: `providedBy` set or `verification ===
-  "client-confirmed"` → `06-organisation-supplied`; kind `image` | `film` →
+"client-confirmed"` → `06-organisation-supplied`; kind `image` | `film` →
   `04-media`; `screenshot` → `05-brand`; `advert` | `standard` | `guidance` |
   `occupation` → `02-role`; everything else → `01-organisation`. A stored
   `folder` always wins (`03-case-material` is only ever chosen by a person).
@@ -33,23 +33,44 @@ existing JSON keys never change. British English everywhere a person reads.
                filled: number, total: number, sourceIds: string[], gaps: string[] }],
   missing: string[] }          // "The role: Duties" … for every empty slot in scope
 ```
+
 `findingIds` are non-rejected findings in scope (org-wide, or the role); a
 slot is filled when it has at least one. `sourceIds` are the sources whose
 (derived) folder is the section's, in scope. Any signed-in member may read.
 
 ### `PATCH /api/sources/:id`
+
 Accepts, in addition to today's fields: `folder`, `tier` + `tierReason`
 (reason required when tier is set; `tier: null` clears the override),
 `rights`, `transcriptSourceId`, `timecode`, `providedBy` (`{name, jobTitle}`
 or null). Enums validated with zod; audited like other edits.
 
+### ZIP of images
+
+`POST /api/organisations/:id/upload` accepts a `.zip` containing PNG and JPEG
+images. The archive may be at most 100 MiB and 500 entries; eligible images
+may total at most 200 MiB uncompressed, each image may be at most 10 MiB
+uncompressed, and at most 200 images are imported. Directories, `__MACOSX`,
+dotfiles and `Thumbs.db` are
+ignored. Other non-images and byte-for-byte duplicate images are skipped and
+reported. Every retained image is scanned separately, then all sources and
+their bytes are committed in one transaction; a threat or scanner failure
+stores nothing.
+
+Success is `201 { imported, sources, skipped }`, where each skipped item is
+`{ name, reason }` and reason is `not-image` or `duplicate`. A ZIP with no
+retained PNG or JPEG image is rejected with 422. Existing single-file uploads
+remain limited to 10 MiB and retain their existing response shape.
+
 ### `PATCH /api/findings/:id`
+
 Accepts, in addition to today's fields: `slot`, `parts`, `fields`, and
 `verified: { note?: string } | null`. Only `reviewer` and `admin` may set or
 clear `verified`; the server fills `by` (session name) and `at`. Every change
 is recorded in the finding's history as today.
 
 ### `POST /api/questions/:id/fact` body `{ slot: Slot, parts?: Part[], claim?: string }`
+
 Only for a question whose status is `answered` with a non-empty answer.
 Creates a `statement` source (verification `client-confirmed`, folder
 `06-organisation-supplied`, text = the answer, locator = `Answer to question
@@ -59,20 +80,22 @@ citation quoting the answer, review `unreviewed`, the given slot and parts,
 `runIds: []`). Returns `{ source, finding }`. Researchers and above.
 
 ### `POST /api/research` (existing) — new optional body fields
+
 - `sections: Section[]` — sections the run should fill.
 - `sourceIds: string[]` — the exact sources to read (≤ 16, all in the
   organisation and in scope, readable; otherwise 422).
-Both are stored on the job. Worker: when `sourceIds` is given, read exactly
-those and skip the website crawl; when only `sections` is given, take the
-newest 16 sources whose folder is one of the selected sections plus
-`01-organisation`; otherwise behave as today. The brief gains a "Places to
-fill" list (the `missing` entries for the selected sections, or all) and the
-slot vocabulary. The output contract gains, per finding, `slot` (one of the
-slot ids or `none`; unknown values become `none`) and `parts`
-(subset of `day`, `workflow`, `matters`, `call`). Tier is never asked of the
-model; it is derived.
+  Both are stored on the job. Worker: when `sourceIds` is given, read exactly
+  those and skip the website crawl; when only `sections` is given, take the
+  newest 16 sources whose folder is one of the selected sections plus
+  `01-organisation`; otherwise behave as today. The brief gains a "Places to
+  fill" list (the `missing` entries for the selected sections, or all) and the
+  slot vocabulary. The output contract gains, per finding, `slot` (one of the
+  slot ids or `none`; unknown values become `none`) and `parts`
+  (subset of `day`, `workflow`, `matters`, `call`). Tier is never asked of the
+  model; it is derived.
 
 ### Packs
+
 New packs are `schemaVersion: "2.0.0"` (`PackV2`): `header`, `tiers`,
 `sections` (every slot listed, empty ones with `findingIds: []`), `register`
 (rows numbered in section order, then unplaced facts), `toConfirm` (register
@@ -99,7 +122,7 @@ with the existing layout and 2.0.0 packs as the eight-section document:
   required values must be non-empty text and list columns must be string
   arrays. Unknown keys are rejected. `media.item.rights` is a `Rights` value.
   `case.measurement.origin` is an organisation source id or `invented and
-  declared`; the latter permits no citations and consequently derives tier 4.
+declared`; the latter permits no citations and consequently derives tier 4.
   When valid fields are supplied the server replaces `claim` with the
   deterministic row sentence. Stored older rows without fields remain
   readable and export their claim.
@@ -171,10 +194,10 @@ with the existing layout and 2.0.0 packs as the eight-section document:
 - A completed or gaps run marks each requested section `extracted` in its
   organisation or role scope. A section already `reviewed` is not downgraded;
   the job instead records `Section <title> was already reviewed; new facts need
-  review`.
+review`.
 - Readiness blocks a section which has at least one filled place but remains
   gathering: `The folder for <section> has facts but was never marked
-  complete.`
+complete.`
 
 ## Step 6: designer's notes and "Sources read"
 
@@ -182,7 +205,7 @@ with the existing layout and 2.0.0 packs as the eight-section document:
   `Organisation.sectionNotes` (organisation, brand, supplied) and
   `Role.sectionNotes` (role, case, media), the same scoping as `sectionStatus`.
 - `GET /api/orgs/:orgId/sections?roleId=<id>` returns `note: SectionNote |
-  null` for every section.
+null` for every section.
 - `PUT /api/orgs/:orgId/sections/:section/note` body `{text, roleId?}`.
   Researchers and above. `text` is trimmed; an empty string removes the note;
   longer than `sectionNoteMaxLength` (20,000 characters) is 422. Role id is
@@ -195,12 +218,12 @@ with the existing layout and 2.0.0 packs as the eight-section document:
   `docs/research-pack-v2.schema.json` lists the property.
 - Markdown (`/md`), for 2.0.0 packs: directly under each section heading, when
   a note exists, `### Designer's note`, the text verbatim, then `_<by> ·
-  <date>_`. At the end of every section, `### Sources read` with a table
+<date>_`. At the end of every section, `### Sources read` with a table
   `Source · Tier · What it gave us · Date read`: one row per pack source whose
   (derived) folder is the section's, ordered by `retrievedAt` then title.
   "What it gave us" lists the places filled by facts citing the source, as
   the slot label when the place is in this section and `<section title> ·
-  <slot label>` otherwise, de-duplicated, or `No facts yet`. "Date read" is
+<slot label>` otherwise, de-duplicated, or `No facts yet`. "Date read" is
   the `retrievedAt` date or `—`. With no sources the heading is followed by
   `_No sources filed in this folder._`
 - DOCX: the same two blocks — a `Heading3` "Designer's note" with one
