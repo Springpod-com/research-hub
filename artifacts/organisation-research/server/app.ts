@@ -1748,6 +1748,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
             m.userId,
             status,
             Number(previous.rows[0].revision) + 1,
+            m.name,
           );
           await db.query(
             "INSERT INTO research_packs(id,org_id,role_id,revision,snapshot) VALUES($1,$2,$3,$4,$5)",

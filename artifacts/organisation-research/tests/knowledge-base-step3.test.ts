@@ -158,3 +158,19 @@ describe("knowledge-base Step 3 exports", () => {
     expect(archive.file("01-organisation/source-400.txt")).toBeNull();
   });
 });
+describe("pack header people", () => {
+  it("prints the compiler's display name and omits an empty fact-checker job title", () => {
+    const workspace = sampleWorkspace();
+    const role = workspace.roles[0]!;
+    const organisation = workspace.organisations.find((item) => item.id === role.orgId)!;
+    organisation.factChecker = { name: "Priya Shah", jobTitle: "" };
+    const pack = makePack(workspace, role.orgId, role.id, "user_2abc", "draft", 1, "Alex Morgan");
+    if (pack.schemaVersion !== "2.0.0") throw new Error("expected a 2.0.0 pack");
+    expect(pack.header.compiledBy).toBe("Alex Morgan");
+    expect(pack.createdBy).toBe("user_2abc");
+    expect(pack.header.factChecker).toBe("Priya Shah");
+    const legacy = makePack(workspace, role.orgId, role.id, "user_2abc", "draft", 2);
+    if (legacy.schemaVersion !== "2.0.0") throw new Error("expected a 2.0.0 pack");
+    expect(legacy.header.compiledBy).toBe("user_2abc");
+  });
+});

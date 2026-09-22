@@ -1150,6 +1150,8 @@ export function makePack(
   actor: string,
   status: "draft" | "ready",
   revision: number,
+  /** The compiler's display name for the document header; the actor id is used when absent. */
+  actorName?: string,
 ): Pack {
   roleInOrg(w, orgId, roleId);
   const issues = readiness(w, orgId, roleId);
@@ -1261,11 +1263,11 @@ export function makePack(
       organisation: organisation.name,
       entity: organisation.division,
       role: role.title,
-      compiledBy: actor,
+      compiledBy: actorName || actor,
       started: organisation.createdAt,
       lastUpdated: now(),
       factChecker: organisation.factChecker
-        ? `${organisation.factChecker.name}, ${organisation.factChecker.jobTitle}`
+        ? [organisation.factChecker.name, organisation.factChecker.jobTitle].filter(Boolean).join(", ")
         : "",
     },
     tiers: tierNames,

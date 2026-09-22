@@ -1,0 +1,44 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "k4mNiZRAG43z5tbhxMmuX"
+uri = "file://attached_assets/marriott-rebuild/comparison.md"
+type = "text"
+title = "Marriott · Executive Sous Chef — offline document vs platform export"
+description = "Section-by-section comparison with headline numbers, quoted examples and every limitation hit during the rebuild."
+logical_id = "cf5c0301-db8f-4b71-91ab-d6325c597a9f"
+content_hash = "sha256:bcfe8f70761661f8f6bf20dafe65754d9469990554867a8c295d1474a9c9d335"
+size = 10169
+mtime_ms = 1790069035383
+storage_uri = "gcs://replit-rams-assets-riker/rams/assets/repl:1d402be1-c3e4-42a4-a0af-526979964041/cf5c0301-db8f-4b71-91ab-d6325c597a9f/dd821df2-c82a-44da-a5b2-155580039358"
+storage_version_token = "1790069174406492"
+content_type = "text/markdown"
+
+[[outputs]]
+id = "nHIxVbUZbsIMk3SMi1Dcy"
+uri = "file://attached_assets/marriott-rebuild/Marriott_Executive-Sous-Chef_platform.docx"
+type = "word_document"
+title = "Marriott · Executive Sous Chef — platform knowledge base (DOCX)"
+description = "Built on the platform from your source folder: designer's notes, fact places, Sources read tables, fact register, questions and confirm page."
+logical_id = "74de9663-59f7-4493-8711-be6d14558185"
+content_hash = "sha256:feedf00ec29840c4ff899acb25312a85114edb9e85faa3b992b0d5115ebd0686"
+size = 24587
+mtime_ms = 1790069030419
+storage_uri = "gcs://replit-rams-assets-riker/rams/assets/repl:1d402be1-c3e4-42a4-a0af-526979964041/74de9663-59f7-4493-8711-be6d14558185/7e2dd08b-d475-4437-bc24-dabef222bde3"
+storage_version_token = "1790069174939747"
+content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+[[outputs]]
+id = "S1ZzSkM2dJ5CTvNQ1QbKU"
+uri = "file://attached_assets/marriott-rebuild/Marriott_confirm.md"
+type = "text"
+title = "Marriott — For the organisation to confirm"
+description = "The 14 tier 2–3 rows used by chapter parts that Marriott would need to confirm."
+logical_id = "f13adb68-83f6-412d-98a1-17e687e714e3"
+content_hash = "sha256:14646b6144e26cc21d1627c518685311bf25d12e0b76be705100e57a9c07a945"
+size = 3278
+mtime_ms = 1790069030587
+storage_uri = "gcs://replit-rams-assets-riker/rams/assets/repl:1d402be1-c3e4-42a4-a0af-526979964041/f13adb68-83f6-412d-98a1-17e687e714e3/8f78acb1-9ca0-435a-ad5b-072fb17d816f"
+storage_version_token = "1790069175531137"
+content_type = "text/markdown"
