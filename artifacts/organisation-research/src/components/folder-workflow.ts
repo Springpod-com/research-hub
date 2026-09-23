@@ -12,8 +12,8 @@ export const sectionSelectionReason = (
 ) =>
   section.roleScoped && !roleId
     ? "Choose a role to use this folder"
-    : section.status.stage === "gathering"
-      ? "Mark the folder complete first"
+    : !(section.readableSourceIds || section.sourceIds).length
+      ? "Add at least one source first"
       : undefined;
 
 export const noteRoleIds = (folder: Folder, roleId?: string): string[] => {

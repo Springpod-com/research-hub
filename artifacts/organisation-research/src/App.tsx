@@ -1893,10 +1893,8 @@ export function App({
       return (
         <PackModal
           org={org!}
-          roles={orgRoles}
           roleOptions={roleOptions.filter(([id]) => id !== "all")}
           initialRole={roleId === "all" ? orgRoles[0]?.id : roleId}
-          canReady={session?.role !== "researcher"}
           onClose={close}
           onSaved={async () => {
             await reload();
@@ -1971,7 +1969,7 @@ export function App({
               "Your shared organisation library",
             ],
             [
-              "Needs review",
+              "Source attention",
               data?.findings.filter(
                 (f) =>
                   f.review === "unreviewed" || f.review === "clarification",
@@ -2016,7 +2014,6 @@ export function App({
                   options={[
                     ["all", "All statuses"],
                     ["researching", "Researching"],
-                    ["unreviewed", "Needs review"],
                     ["ready", "Ready for storyboarding"],
                     ["draft", "Draft"],
                   ]}
@@ -2502,7 +2499,7 @@ export function App({
         : undefined;
     const setFolderStatus = async (
       section: Section,
-      stage: "gathering" | "complete" | "reviewed",
+      stage: "gathering" | "reviewed",
     ) => {
       const summary = sectionData?.sections.find(
         (item) => item.section === section,
@@ -2517,11 +2514,7 @@ export function App({
                 summary?.roleScoped && roleId !== "all" ? roleId : undefined,
             }),
           }),
-        stage === "reviewed"
-          ? "Folder marked reviewed"
-          : stage === "complete"
-            ? "Folder marked complete"
-            : "Folder reopened",
+        stage === "reviewed" ? "Folder marked reviewed" : "Reviewed tick removed",
       );
     };
     return (
@@ -2711,9 +2704,7 @@ export function App({
                   onChange={setFilter}
                   options={[
                     ["all", "All facts"],
-                    ["unreviewed", "Needs review"],
                     ["accepted", "Registered"],
-                    ["clarification", "Needs clarification"],
                     ["rejected", "Excluded"],
                   ]}
                 />
@@ -2932,73 +2923,7 @@ export function App({
                         "Location and seniority not specified"}
                     </U.CardDescription>
                   </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <U.Badge
-                      variant={
-                        r.reviewState === "ready" ? "default" : "outline"
-                      }
-                    >
-                      {labels[r.reviewState || "draft"]}
-                    </U.Badge>
-                    {r.reviewState !== "in-review" && (
-                      <U.Button
-                        variant="outline"
-                        size="sm"
-                        disabled={busy}
-                        onClick={() =>
-                          run(
-                            () =>
-                              post(`/roles/${r.id}/review-state`, {
-                                state: "in-review",
-                                version: r.version,
-                              }),
-                            "Sent for review",
-                          )
-                        }
-                      >
-                        {r.reviewState === "ready"
-                          ? "Reopen for review"
-                          : "Send for review"}
-                      </U.Button>
-                    )}
-                    {r.reviewState === "in-review" &&
-                      session?.role !== "researcher" && (
-                        <U.Button
-                          size="sm"
-                          disabled={busy}
-                          onClick={() =>
-                            run(
-                              () =>
-                                post(`/roles/${r.id}/review-state`, {
-                                  state: "ready",
-                                  version: r.version,
-                                }),
-                              "Role profile marked ready",
-                            )
-                          }
-                        >
-                          Mark ready
-                        </U.Button>
-                      )}
-                    {r.reviewState === "in-review" && (
-                      <U.Button
-                        variant="ghost"
-                        size="sm"
-                        disabled={busy}
-                        onClick={() =>
-                          run(
-                            () =>
-                              post(`/roles/${r.id}/review-state`, {
-                                state: "draft",
-                                version: r.version,
-                              }),
-                            "Returned to draft",
-                          )
-                        }
-                      >
-                        Return to draft
-                      </U.Button>
-                    )}
+                   <div className="flex flex-wrap items-center gap-2">
                     <U.Button
                       variant="ghost"
                       size="sm"
@@ -3020,24 +2945,6 @@ export function App({
                     )}
                   </div>
                 </div>
-                {r.reviewChanged && (
-                  <U.Alert className="mt-3">
-                    <U.AlertDescription>
-                      Content changed after this profile was marked ready, so it
-                      is back in draft. Send it for review again before creating
-                      a ready research pack.
-                    </U.AlertDescription>
-                  </U.Alert>
-                )}
-                {r.reviewState === "in-review" &&
-                  session?.role === "researcher" && (
-                    <p className="text-p5 text-muted-foreground mt-2">
-                      Waiting for a reviewer to confirm readiness{" "}
-                      <WhatsThis term="readiness">{READINESS_HELP}</WhatsThis>.
-                      Only reviewers and administrators can mark a profile
-                      ready.
-                    </p>
-                  )}
               </U.CardHeader>
               <U.CardContent className="space-y-5">
                 <div>
@@ -3227,8 +3134,7 @@ export function App({
                 <Status value={q.status} />
                 {q.blocking && (
                   <U.Badge variant="outline">
-                    Blocks readiness{" "}
-                    <WhatsThis term="readiness">{READINESS_HELP}</WhatsThis>
+                    Listed as an open item
                   </U.Badge>
                 )}
               </div>
@@ -3959,7 +3865,9 @@ function EvidencePanel({
 }) {
   const [claim, setClaim] = useState(f.claim);
   const [kind, setKind] = useState(f.kind);
-  const [status, setStatus] = useState(f.review);
+  const [status, setStatus] = useState<"accepted" | "rejected">(
+    f.review === "rejected" ? "rejected" : "accepted",
+  );
   const [rationale, setRationale] = useState(f.rationale);
   const [slot, setSlot] = useState<Slot>(f.slot || "none");
   const [fields, setFields] = useState<FactFieldValues>(() =>
@@ -4019,9 +3927,7 @@ function EvidencePanel({
               <U.AlertDescription>
                 A newer capture no longer contains this exact quotation. Check
                 the passage against the new capture before saving a review; the
-                fact blocks readiness{" "}
-                <WhatsThis term="readiness">{READINESS_HELP}</WhatsThis> until
-                it is reviewed again.
+                fact is marked for attention until it is checked again.
               </U.AlertDescription>
             </U.Alert>
           )}
@@ -4167,9 +4073,7 @@ function EvidencePanel({
               setError("");
             }}
             options={[
-              ["unreviewed", "Needs review"],
-              ["accepted", "Register"],
-              ["clarification", "Needs clarification"],
+              ["accepted", f.review === "rejected" ? "Restore" : "Registered"],
               ["rejected", "Exclude from the pack"],
             ]}
           />
@@ -4606,29 +4510,23 @@ function SourcePanel({
 }
 function PackModal({
   org,
-  roles,
   roleOptions,
   initialRole,
-  canReady,
   onClose,
   onSaved,
 }: {
   org: Organisation;
-  roles: Role[];
   roleOptions: [string, string][];
   initialRole: string;
-  canReady: boolean;
   onClose: () => void;
   onSaved: () => Promise<void>;
 }) {
   const [role, setRole] = useState(initialRole);
-  const [status, setStatus] = useState("draft");
   const [issues, setIssues] = useState<string[]>([]);
-  const reviewState = roles.find((r) => r.id === role)?.reviewState || "draft";
   const [checking, setChecking] = useState(true);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const dirty = role !== initialRole || status !== "draft";
+  const dirty = role !== initialRole;
   const closeGuard = useFormCloseGuard({ dirty, busy, onClose });
   useEffect(() => {
     let active = true;
@@ -4672,40 +4570,14 @@ function PackModal({
             options={roleOptions}
             autoFocus
           />
-          <Pick
-            label="Pack status"
-            value={status}
-            onChange={(value) => {
-              setStatus(value);
-              setError("");
-            }}
-            options={
-              canReady
-                ? [
-                    ["draft", "Draft research pack"],
-                    ["ready", "Ready for storyboard drafting"],
-                  ]
-                : [["draft", "Draft research pack"]]
-            }
-          />
-          {status === "ready" && (
-            <p className="text-p5 text-muted-foreground">
-              Role profile review state: <strong>{labels[reviewState]}</strong>.{" "}
-              {reviewState === "ready"
-                ? "The reviewed content is copied into this pack and never changes afterwards."
-                : "A ready pack needs the role profile marked ready by a reviewer after readiness checks pass."}
-            </p>
-          )}
           {checking ? (
             <p className="text-p4">
-              Checking readiness…{" "}
-              <WhatsThis term="readiness">{READINESS_HELP}</WhatsThis>
+              Checking open items…
             </p>
           ) : issues.length ? (
             <U.Alert>
               <U.AlertTitle>
-                Before marking ready{" "}
-                <WhatsThis term="readiness">{READINESS_HELP}</WhatsThis>
+                Open items
               </U.AlertTitle>
               <U.AlertDescription>
                 <ul className="list-disc pl-5 space-y-2 mt-3">
@@ -4713,16 +4585,12 @@ function PackModal({
                     <li key={i}>{i}</li>
                   ))}
                 </ul>
-                <p className="mt-3">
-                  You can still create a clearly labelled draft.
-                </p>
               </U.AlertDescription>
             </U.Alert>
           ) : (
             <U.Alert>
               <U.AlertDescription>
-                Readiness checks passed. Questions for the organisation remain
-                in the handover; this is not the organisation's approval.
+                <strong>Open items:</strong> None
               </U.AlertDescription>
             </U.Alert>
           )}
@@ -4742,16 +4610,13 @@ function PackModal({
           </U.Button>
           <U.Button
             disabled={
-              busy ||
-              checking ||
-              (status === "ready" &&
-                (issues.length > 0 || reviewState !== "ready"))
+              busy || checking
             }
             onClick={async () => {
               setBusy(true);
               setError("");
               try {
-                await post(`/roles/${role}/packs`, { status });
+                await post(`/roles/${role}/packs`, {});
                 await onSaved();
                 onClose();
               } catch (e) {

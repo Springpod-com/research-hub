@@ -39,6 +39,7 @@ function notedWorkspace() {
   source.folder = "02-role";
   source.tier = 2;
   workspace.findings[0].slot = "role.title";
+  workspace.findings[0].review = "accepted";
   role.sectionNotes = {
     role: {
       text: "Keep the shift handover visually prominent.\n\nUse the team's own language.",
@@ -190,6 +191,24 @@ describe("knowledge-base Step 6 designer notes and source trails", () => {
       "| Sample role brief — fictional | 2 | The role as the organisation names it |",
     );
     expect(markdown.match(/### Sources read/g)).toHaveLength(6);
+    expect(markdown.indexOf("### Sources read")).toBeLessThan(
+      markdown.indexOf("### In one paragraph"),
+    );
+    expect(markdown).toContain("## Sources register");
+    expect(markdown).toContain("## For the organisation to confirm");
+    expect(markdown).toContain(
+      "| Source | Folder | Tier | Facts | Confirmed by | Date |",
+    );
+    const headings = markdown
+      .split("\n")
+      .filter((line) => line.startsWith("#"));
+    const roleHeading = headings.indexOf("## 2. The role");
+    expect(headings.slice(roleHeading, roleHeading + 4)).toEqual([
+      "## 2. The role",
+      "### Designer's note",
+      "### Sources read",
+      "### The role as the organisation names it",
+    ]);
   });
 
   it("puts both blocks in DOCX and the note file in the folder archive", async () => {
@@ -199,6 +218,22 @@ describe("knowledge-base Step 6 designer notes and source trails", () => {
     expect(text).toContain("Designer's note");
     expect(text).toContain("Sources read");
     expect(text).toContain("What it gave us");
+    const xml = await documentXml(document);
+    const $ = load(xml, { xmlMode: true });
+    const paragraphTexts = $("w\\:body w\\:p")
+      .map((_, paragraph) => $(paragraph).find("w\\:t").text())
+      .get();
+    const roleHeading = paragraphTexts.indexOf("2. The role");
+    const noteHeading = paragraphTexts.indexOf("Designer's note", roleHeading);
+    const sourcesHeading = paragraphTexts.indexOf("Sources read", noteHeading);
+    const firstFact = paragraphTexts.indexOf(
+      "The coordinator checks incoming deliveries against purchase orders.",
+      sourcesHeading,
+    );
+    expect(roleHeading).toBeGreaterThanOrEqual(0);
+    expect(noteHeading).toBeGreaterThan(roleHeading);
+    expect(sourcesHeading).toBeGreaterThan(noteHeading);
+    expect(firstFact).toBeGreaterThan(sourcesHeading);
 
     const store = await Store.open();
     stores.push(store);

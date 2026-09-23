@@ -272,9 +272,9 @@ Built: the six folders are the unit of work for each organisation.
 - **Add material.** A researcher can capture a page, upload a document, record
   a statement or add a Markdown team note to the relevant folder. Notes retain
   where their material was extracted from.
-- **Mark complete.** Once gathering is finished, a researcher marks the folder
-  complete. Readiness identifies a folder which already has facts but was
-  never marked complete.
+- **Automatic state.** A folder is gathering until a worker extracts at least
+  one readable source, then it is extracted. There is no manual completion
+  step.
 - **Extract.** Research reads selected folder material and extracts facts and
   evidence into the section's places. Completion marks the folder extracted;
   material added afterwards is counted. Crawling the organisation website is
@@ -284,8 +284,8 @@ Built: the six folders are the unit of work for each organisation.
   Role-scoped runs may place supported facts in other folders without changing
   those folders' workflow status; organisation-wide runs cannot place facts in
   role-scoped folders.
-- **Reviewed.** A reviewer or administrator can mark a folder reviewed only
-  when it has no unreviewed facts. A later extraction never silently removes
+- **Reviewed.** A reviewer or administrator can mark or unmark a folder
+  reviewed without preconditions. A later extraction never silently removes
   that sign-off: it leaves the status reviewed and records that new facts need
   review.
 - **Design notes and source trails.** Researchers can keep a designer's note

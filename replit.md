@@ -36,7 +36,11 @@ Owner-provided values (see README table): Replit-managed Clerk keys (`CLERK_PUBL
 - Deployment target is Reserved VM (`deploymentTarget = "vm"` in `.replit`) because the research worker is embedded in the web process and must stay running.
 - Template `api-server` and `lib/*` packages were removed: the app owns `/api` itself and the shared OpenAPI/Drizzle libs were unused.
 - Occupational reference data is bundled, versioned JSON (UK SOC 2020 primary, O*NET supplementary) loaded in memory by `server/occupations.ts`; matching is deterministic keyword retrieval with the matched terms as rationale. No live API, no model, no DB schema for it.
-- Pack review state lives on the role profile (`draft` → `in-review` → `ready`); a content fingerprint taken at "ready" returns the profile to draft on any later edit, and ready snapshots require the profile to be ready.
+- Approval is simplified: evidence-backed facts are registered by default and
+  may only be excluded or restored; folders move automatically from gathering
+  to extracted and can carry an optional reviewer tick. Pack creation has one
+  immutable schema-2 path, blocked only by an active extraction; readiness is
+  retained as an advisory Open items list.
 - Refreshing a web source never mutates the earlier capture: a new source supersedes it and findings whose quotation disappeared are flagged for re-review (readiness gate) until reviewed again.
 - Four dependencies are pinned one patch behind the supplied lockfile because the workspace enforces a 24-hour minimum package age: `@clerk/express` 2.1.67, `@clerk/react` 6.15.2, `@types/node` 22.20.2, `prettier` 3.9.6. Bump back once the versions are older than a day.
 

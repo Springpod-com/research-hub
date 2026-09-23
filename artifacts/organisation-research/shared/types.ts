@@ -98,12 +98,16 @@ export interface SectionSummary {
   filled: number;
   total: number;
   sourceIds: string[];
+  /** Readable sources available to extraction in this folder. */
+  readableSourceIds?: string[];
+  /** Source titles in this folder, in source order. */
+  sourceTitles?: string[];
   gaps: string[];
   /** Folder status in scope; gathering when never set. */
   status: SectionStatus;
   /** Sources added to the folder after the last extraction. */
   addedSinceExtraction: number;
-  /** Facts in scope still to be reviewed (gates "Reviewed"). */
+  /** Legacy facts in scope still carrying an old review value. */
   unreviewed: number;
   /** Designer's note for the section in scope; null when none has been written. */
   note: SectionNote | null;
@@ -120,13 +124,13 @@ export interface Verified {
 export type Rights = "organisation-supplied" | "press-kit" | "reference-only";
 /**
  * Folder-first workflow (docs/knowledge-base-alignment.md §9): a section's
- * folder is gathered, marked complete, extracted into facts, then reviewed.
- * Absent = gathering. "extracted" is set by the research worker only.
+ * folder is gathering until the worker extracts it. Review is an optional
+ * reviewer/admin sign-off. "complete" remains only for stored legacy data.
  */
 export type SectionStage = "gathering" | "complete" | "extracted" | "reviewed";
 export const sectionStageNames: Record<SectionStage, string> = {
   gathering: "Gathering",
-  complete: "Folder complete",
+  complete: "Gathering",
   extracted: "Extracted",
   reviewed: "Reviewed",
 };
@@ -134,6 +138,8 @@ export interface SectionStatus {
   stage: SectionStage;
   by: string;
   at: string;
+  /** Automatic stage hidden by the optional reviewed tick. */
+  reviewedFrom?: "gathering" | "extracted";
 }
 /** Designer's note for a section: free Markdown text shown at the top of the section, kept apart from the facts. */
 export interface SectionNote {

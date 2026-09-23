@@ -199,9 +199,8 @@ export function ResearchDialog({
         <U.DialogHeader>
           <U.DialogTitle>Extract facts and evidence</U.DialogTitle>
           <U.DialogDescription>
-            Reads the selected captured sources for {org.name}, then drafts
-            facts and questions for the organisation. Nothing is registered
-            without a reviewer.
+            Reads the selected captured sources for {org.name}, then registers
+            evidence-backed facts and drafts questions for the organisation.
           </U.DialogDescription>
         </U.DialogHeader>
         <div className="space-y-5">

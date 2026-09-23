@@ -207,26 +207,14 @@ describe("Official occupational data", () => {
   });
 });
 
-describe("Pack review state", () => {
-  it("lets researchers send for review but not mark ready", async () => {
+describe("Simplified pack creation", () => {
+  it("retires role approval states", async () => {
     const r = await request(researcher())
       .post(`/api/roles/${role().id}/review-state`)
       .send({ state: "in-review", version: (await currentRole()).version });
-    expect(r.status).toBe(200);
-    expect(r.body.reviewState).toBe("in-review");
-    expect(
-      (
-        await request(researcher())
-          .post(`/api/roles/${role().id}/review-state`)
-          .send({ state: "ready", version: (await currentRole()).version })
-      ).status,
-    ).toBe(403);
+    expect(r.status).toBe(422);
   });
-  it("blocks ready until readiness passes, then gates ready snapshots on it", async () => {
-    const blocked = await request(app())
-      .post(`/api/roles/${role().id}/review-state`)
-      .send({ state: "ready", version: (await currentRole()).version });
-    expect(blocked.status).toBe(422);
+  it("creates the single pack without marking ready", async () => {
     const f = fixture.findings[0];
     const a = fixture.activities[0];
     expect(
@@ -243,24 +231,13 @@ describe("Pack review state", () => {
           .send({ ...a, review: "accepted" })
       ).status,
     ).toBe(200);
-    // Readiness passes, but the profile has not been marked ready yet.
-    const early = await request(app())
-      .post(`/api/roles/${role().id}/packs`)
-      .send({ status: "ready" });
-    expect(early.status).toBe(422);
-    expect(early.body.error).toMatch(/Mark the role profile ready/);
-    const ready = await request(app())
-      .post(`/api/roles/${role().id}/review-state`)
-      .send({ state: "ready", version: (await currentRole()).version });
-    expect(ready.status).toBe(200);
-    expect(ready.body.reviewState).toBe("ready");
     const pack = await request(app())
       .post(`/api/roles/${role().id}/packs`)
-      .send({ status: "ready" });
+      .send({});
     expect(pack.status).toBe(201);
-    expect(pack.body.role.reviewState).toBe("ready");
+    expect(pack.body.status).toBe("ready");
   });
-  it("returns a ready profile to draft when reviewed content changes", async () => {
+  it("still creates a pack after content changes", async () => {
     const org = fixture.organisations[0];
     expect(
       (
@@ -269,20 +246,10 @@ describe("Pack review state", () => {
           .send({ ...org, version: 1, summary: "Edited after sign-off" })
       ).status,
     ).toBe(200);
-    const r = await currentRole();
-    expect(r.reviewState).toBe("draft");
-    expect(r.reviewChanged).toBe(true);
     const pack = await request(app())
       .post(`/api/roles/${role().id}/packs`)
-      .send({ status: "ready" });
-    expect(pack.status).toBe(422);
-    expect(
-      (
-        await request(app())
-          .post(`/api/roles/${role().id}/packs`)
-          .send({ status: "draft" })
-      ).status,
-    ).toBe(201);
+      .send({});
+    expect(pack.status).toBe(201);
   });
 });
 
@@ -327,7 +294,7 @@ describe("Source refresh", () => {
     // matches the immutable earlier capture, so the record stays valid.
     const rereview = await request(app())
       .patch(`/api/findings/${flagged.id}`)
-      .send({ ...finding, review: "clarification" });
+      .send({ ...finding, review: "accepted" });
     expect(rereview.status).toBe(200);
     expect(
       (await request(app()).get(`/api/roles/${role().id}/readiness`)).body
@@ -449,15 +416,7 @@ describe("Refresh integrity", () => {
       ).status,
     ).toBe(200);
   });
-  it("keeps a ready profile ready through an unchanged refresh but not through a source edit", async () => {
-    const send = async (state: string) =>
-      request(app())
-        .post(`/api/roles/${role().id}/review-state`)
-        .send({ state, version: (await currentRole()).version });
-    expect((await send("in-review")).status).toBe(200);
-    const ready = await send("ready");
-    expect(ready.status).toBe(200);
-    expect((await currentRole()).reviewState).toBe("ready");
+  it("keeps refresh integrity through an unchanged refresh and source edit", async () => {
     const gen3 = await latest();
     page.current = html(
       gen3.text
@@ -468,7 +427,6 @@ describe("Refresh integrity", () => {
     const r = await request(app()).post(`/api/sources/${gen3.id}/refresh`);
     expect(r.status).toBe(201);
     expect(r.body.changed).toBe(false);
-    expect((await currentRole()).reviewState).toBe("ready");
     // Superseding bumped the earlier capture's version; a stale edit is 409.
     expect(
       (
@@ -486,9 +444,7 @@ describe("Refresh integrity", () => {
         caption: "Checked with the client",
       });
     expect(edited.status).toBe(200);
-    const view = await currentRole();
-    expect(view.reviewState).toBe("draft");
-    expect(view.reviewChanged).toBe(true);
+    expect(edited.body.caption).toBe("Checked with the client");
   });
 });
 
@@ -580,7 +536,7 @@ describe("Refresh transitions", () => {
     );
     expect(stored.sourceChanges.at(-1).quoteFound).toBe(true);
   });
-  it("reverts ready when source provenance changes or a research run records an error", async () => {
+  it("tracks source provenance changes and research-run errors", async () => {
     const w = (await request(app()).get("/api/workspace")).body;
     const flagged = w.findings.find((f: { claim: string }) =>
       f.claim.startsWith("Deliveries are checked"),
@@ -592,12 +548,6 @@ describe("Refresh transitions", () => {
           .send({ ...flagged, review: "rejected" })
       ).status,
     ).toBe(200);
-    const send = async (state: string) =>
-      request(app())
-        .post(`/api/roles/${role().id}/review-state`)
-        .send({ state, version: (await currentRole()).version });
-    expect((await send("in-review")).status).toBe(200);
-    expect((await send("ready")).status).toBe(200);
     // Same text as an existing statement but different provenance: the pack
     // would contain a new source entry, so the profile returns to draft.
     const statement = fixture.sources[0];
@@ -616,7 +566,6 @@ describe("Refresh transitions", () => {
         locator: statement.locator,
       });
     expect(twin.status).toBe(201);
-    expect((await currentRole()).reviewState).toBe("draft");
     // A finished research run with no errors does not disturb readiness...
     await store.transact((ws) => {
       ws.jobs.push({
@@ -632,16 +581,17 @@ describe("Refresh transitions", () => {
         runs: [],
       });
     });
-    expect((await send("in-review")).status).toBe(200);
-    expect((await send("ready")).status).toBe(200);
-    expect((await currentRole()).reviewState).toBe("ready");
     // ...but an error recorded on it becomes a pack limitation, so it does.
     await store.transact((ws) => {
       ws.jobs
         .find((j) => j.roleId === role().id)!
         .errors.push("Model call failed: simulated");
     });
-    expect((await currentRole()).reviewState).toBe("draft");
+    const pack = await request(app())
+      .post(`/api/roles/${role().id}/packs`)
+      .send({});
+    expect(pack.status).toBe(201);
+    expect(pack.body.limitations).toContain("Model call failed: simulated");
   });
 });
 

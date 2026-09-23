@@ -14,3 +14,8 @@ description: Non-obvious domain rules for pack readiness fingerprints, web-sourc
 - **Dataset-search matches are server-hydrated.** The client may only choose scheme, code, statements and rationale; identity fields come from the bundled entry, statements must belong to it, status is forced to proposed and a separate audited status route confirms it (owner: the researcher confirms). Manual matches keep the supplied app's behaviour.
 
 - **Datasets are bundled JSON, not live APIs** (owner decision): ONS SOC 2020 (OGL v3) primary, O*NET (CC BY 4.0) supplementary labelled US. Refresh by re-running the import and committing; there is no database schema for them.
+
+## Simplified approval (2026-09-23, owner-approved)
+Facts are registered by default once the quotation check passes; humans only exclude/restore. Folder stages are gathering/extracted plus an optional reviewer tick (reviewer/admin for set and undo; `reviewedFrom` restores the automatic stage). Packs always build (409 only while a run is active); readiness is advisory "Open items". Sources read sits under each section heading; a Sources register closes the document; the confirmation page lists tier 2–4 sources.
+**Why:** the owner said the point of the document is listing the sources; the approval ceremony was blocking exports without adding evidence.
+**How to apply:** do not reintroduce gates on export or review states; keep legacy enum values only for old data.

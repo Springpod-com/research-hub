@@ -65,6 +65,37 @@ describe("Evidence and immutable pack workflow", () => {
       ).status,
     ).toBe(422);
   });
+  it("registers new facts by default and supports exclude and restore", async () => {
+    const created = await request(app())
+      .post(`/api/organisations/${fixture.organisations[0].id}/findings`)
+      .send({
+        claim: "A declared design proposal",
+        kind: "proposal",
+        citations: [],
+      });
+    expect(created.status).toBe(201);
+    expect(created.body.review).toBe("accepted");
+    const excluded = await request(app())
+      .patch(`/api/findings/${created.body.id}`)
+      .send({ ...created.body, review: "rejected" });
+    expect(excluded.status).toBe(200);
+    expect(excluded.body.review).toBe("rejected");
+    const restored = await request(app())
+      .patch(`/api/findings/${created.body.id}`)
+      .send({ ...excluded.body, review: "accepted" });
+    expect(restored.status).toBe(200);
+    expect(restored.body.review).toBe("accepted");
+  });
+  it.each(["unreviewed", "clarification"])(
+    "rejects the removed %s review decision",
+    async (review) => {
+      const finding = (await request(app()).get("/api/workspace")).body.findings[0];
+      const response = await request(app())
+        .patch(`/api/findings/${finding.id}`)
+        .send({ ...finding, review });
+      expect(response.status).toBe(422);
+    },
+  );
   it("accepts a verbatim passage copied with different spacing or quotation marks", async () => {
     const f = fixture.findings[0];
     const source = fixture.sources.find(
@@ -199,14 +230,14 @@ describe("Evidence and immutable pack workflow", () => {
       "Paste the exact supporting passage",
     );
   });
-  it("blocks a ready pack until findings are reviewed", async () => {
+  it("creates a pack without a ready gate", async () => {
     expect(
       (
         await request(app())
           .post(`/api/roles/${fixture.roles[0].id}/packs`)
           .send({ status: "ready" })
       ).status,
-    ).toBe(422);
+    ).toBe(201);
   });
   it("records review history and rejects stale edits", async () => {
     const f = fixture.findings[0];
@@ -258,7 +289,7 @@ describe("Evidence and immutable pack workflow", () => {
       .post("/api/findings/bulk-review")
       .send({
         ids: [ids[0], randomUUID()],
-        review: "clarification",
+        review: "rejected",
       });
     expect(failed.status).toBe(404);
     const unchanged = (await request(app()).get("/api/workspace")).body.findings
@@ -396,7 +427,7 @@ describe("Evidence and immutable pack workflow", () => {
       ).status,
     ).toBe(200);
   });
-  it("requires provenance for answers and blocks on unresolved material questions", async () => {
+  it("requires provenance for answers and reports unresolved material questions", async () => {
     const q = await request(app())
       .post(`/api/organisations/${fixture.roles[0].orgId}/questions`)
       .send({
@@ -411,7 +442,11 @@ describe("Evidence and immutable pack workflow", () => {
           .post(`/api/roles/${fixture.roles[0].id}/packs`)
           .send({ status: "ready" })
       ).status,
-    ).toBe(422);
+    ).toBe(201);
+    expect(
+      (await request(app()).get(`/api/roles/${fixture.roles[0].id}/readiness`))
+        .body.issues,
+    ).toContain("Resolve questions marked as blocking.");
     expect(
       (
         await request(app())
@@ -430,7 +465,7 @@ describe("Evidence and immutable pack workflow", () => {
       ).status,
     ).toBe(200);
   });
-  it("limits ready packs and membership management by workspace role", async () => {
+  it("allows researchers to create packs but limits membership management", async () => {
     const researcher = createApp(store, {
       testMember: { ...reviewer, role: "researcher" },
     });
@@ -440,7 +475,7 @@ describe("Evidence and immutable pack workflow", () => {
           .post(`/api/roles/${fixture.roles[0].id}/packs`)
           .send({ status: "ready" })
       ).status,
-    ).toBe(403);
+    ).toBe(201);
     expect(
       (
         await request(app()).post("/api/members").send({
@@ -453,6 +488,7 @@ describe("Evidence and immutable pack workflow", () => {
     ).toBe(403);
   });
   it("exports identical immutable snapshots with increasing revisions", async () => {
+    const initialPackCount = (await store.packs()).length;
     await store.transact((w) => {
       for (const source of w.sources.filter(
         (item) =>
@@ -465,14 +501,7 @@ describe("Evidence and immutable pack workflow", () => {
       }
     });
     const path = `/api/roles/${fixture.roles[0].id}/packs`;
-    const markReady = async () => {
-      const role = (await request(app()).get("/api/workspace")).body.roles[0];
-      return request(app())
-        .post(`/api/roles/${role.id}/review-state`)
-        .send({ state: "ready", version: role.version });
-    };
-    expect((await markReady()).status).toBe(200);
-    const first = await request(app()).post(path).send({ status: "ready" });
+    const first = await request(app()).post(path).send({});
     expect(first.status).toBe(201);
     expect(first.body.employerApproval).toBe(false);
     const org = fixture.organisations[0];
@@ -483,12 +512,7 @@ describe("Evidence and immutable pack workflow", () => {
           .send({ ...org, summary: "Later edited summary" })
       ).status,
     ).toBe(200);
-    // The edit returned the profile to draft; it must be re-reviewed first.
-    expect(
-      (await request(app()).post(path).send({ status: "ready" })).status,
-    ).toBe(422);
-    expect((await markReady()).status).toBe(200);
-    const second = await request(app()).post(path).send({ status: "ready" });
+    const second = await request(app()).post(path).send({});
     expect(second.body.revision).toBe(first.body.revision + 1);
     const json = await request(app()).get(`/api/packs/${first.body.id}/json`);
     const md = await request(app()).get(`/api/packs/${first.body.id}/md`);
@@ -505,7 +529,32 @@ describe("Evidence and immutable pack workflow", () => {
         ]);
       }),
     ).rejects.toThrow("immutable");
-    expect((await store.packs()).length).toBe(2);
+    expect((await store.packs()).length).toBe(initialPackCount + 2);
+  });
+  it("returns 409 while extraction is active", async () => {
+    const job = {
+      ...base(),
+      orgId: fixture.organisations[0].id,
+      roleId: fixture.roles[0].id,
+      tier: "economy" as const,
+      status: "queued" as const,
+      stage: "Queued",
+      errors: [],
+      requestedBy: reviewer.userId,
+      attempts: 0,
+      runs: [],
+    };
+    await store.transact((workspace) => workspace.jobs.push(job));
+    const response = await request(app())
+      .post(`/api/roles/${fixture.roles[0].id}/packs`)
+      .send({});
+    expect(response.status).toBe(409);
+    expect(response.body.error).toBe(
+      "Wait for the running extraction to finish.",
+    );
+    await store.transact((workspace) => {
+      workspace.jobs = workspace.jobs.filter((item) => item.id !== job.id);
+    });
   });
   it("deletes a role with its scoped records but never an exported one", async () => {
     const org = fixture.organisations[0];
@@ -718,6 +767,7 @@ describe("Knowledge-base derived views and packs", () => {
     const w = sampleWorkspace();
     w.findings[0].slot = "role.duty";
     w.findings[0].parts = ["day", "day"];
+    w.findings[0].review = "accepted";
     const pack = makePack(
       w,
       w.organisations[0].id,

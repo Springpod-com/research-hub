@@ -279,6 +279,17 @@ function fillV2($: CheerioAPI, body: Cheerio<any>, pack: PackV2) {
     },
     missing,
   );
+  const headerTable = body.children("w\\:tbl").first();
+  if (headerTable.length)
+    headerTable.after(
+      [
+        styledParagraph("Heading3", "Open items"),
+        ...(pack.limitations.length ? pack.limitations : ["None"]).map(
+          (value) =>
+            `<w:p><w:r><w:t xml:space="preserve">${escaped(pack.limitations.length ? `• ${value}` : value)}</w:t></w:r></w:p>`,
+        ),
+      ].join(""),
+    );
 
   for (const [slot, prefix] of Object.entries(prosePrefixes) as [Slot, string][]) {
     const rows = v2Rows(pack, slot).map((_, index) => {
@@ -391,16 +402,16 @@ function fillV2($: CheerioAPI, body: Cheerio<any>, pack: PackV2) {
     $,
     body,
     "For the organisation to confirm",
-    pack.toConfirm.map((row) => [
-      row.n,
-      row.claim,
-      row.tier,
-      row.sourceIds.map((id) => names.get(id) || id).join("; "),
-      row.parts.map((part) => partNames[part]).join("; "),
+    pack.sources.filter((source) => (source.tier || 4) > 1 && pack.register.some((row) => row.sourceIds.includes(source.id))).map((source) => [
+      source.title,
+      pack.sections.find((section) => section.folder === source.folder)?.title || source.folder || "—",
+      source.tier || 4,
+      pack.register.filter((row) => row.sourceIds.includes(source.id)).map((row) => row.n).join(", "),
+      "",
       "",
     ]),
     missing,
-    ["#", "Fact", "Tier", "Source", "Parts", "Confirmed (initials, date)"],
+    ["Source", "Folder", "Tier", "Facts", "Confirmed by", "Date"],
   );
   pack.sections.forEach((section, index) => {
     const headingText = `${index + 1}. ${section.title}`;
@@ -412,35 +423,18 @@ function fillV2($: CheerioAPI, body: Cheerio<any>, pack: PackV2) {
       missing.push(headingText);
       return;
     }
-    if (section.note) {
-      const paragraphs = section.note.text
+    const rows = sourcesReadRows(pack, section);
+    const inserted = [
+      ...(section.note ? [
+        styledParagraph("Heading3", "Designer's note"),
+        ...section.note.text
         .split(/\r?\n\s*\r?\n/)
         .map(
           (value) =>
             `<w:p><w:r><w:t xml:space="preserve">${escaped(value)}</w:t></w:r></w:p>`,
-        );
-      headingNode.after(
-        [
-          styledParagraph("Heading3", "Designer's note"),
-          ...paragraphs,
-          `<w:p><w:r><w:rPr><w:i/></w:rPr><w:t xml:space="preserve">${escaped(`${section.note.by} · ${section.note.at.slice(0, 10)}`)}</w:t></w:r></w:p>`,
-        ].join(""),
-      );
-    }
-    const nextHeading =
-      index + 1 < pack.sections.length
-        ? `${index + 2}. ${pack.sections[index + 1].title}`
-        : "7. Fact register";
-    const nextNode = body
-      .children("w\\:p")
-      .filter((_, node) => nodeText($, node) === nextHeading)
-      .first();
-    if (!nextNode.length) {
-      missing.push(nextHeading);
-      return;
-    }
-    const rows = sourcesReadRows(pack, section);
-    nextNode.before(
+        ),
+        `<w:p><w:r><w:rPr><w:i/></w:rPr><w:t xml:space="preserve">${escaped(`${section.note.by} · ${section.note.at.slice(0, 10)}`)}</w:t></w:r></w:p>`,
+      ] : []),
       styledParagraph("Heading3", "Sources read"),
       genericTable([
         ["Source", "Tier", "What it gave us", "Date read"],
@@ -451,8 +445,27 @@ function fillV2($: CheerioAPI, body: Cheerio<any>, pack: PackV2) {
           row.date,
         ]),
       ]),
-    );
+    ];
+    headingNode.after(inserted.join(""));
   });
+  const questionsHeading = body.children("w\\:p").filter((_, node) => nodeText($, node) === "8. Questions for the organisation").first();
+  if (questionsHeading.length) {
+    const folderTitle = new Map(pack.sections.map((section) => [section.folder, section.title]));
+    questionsHeading.before(
+      styledParagraph("Heading2", "Sources register"),
+      genericTable([
+        ["Source", "Folder", "Tier", "Permission", "Date read", "Facts"],
+        ...[...pack.sources].sort((a, b) => (a.folder || "").localeCompare(b.folder || "") || a.retrievedAt.localeCompare(b.retrievedAt)).map((source) => [
+          source.title,
+          folderTitle.get(source.folder!) || source.folder || "—",
+          source.tier || "—",
+          source.permission,
+          source.retrievedAt.slice(0, 10) || "—",
+          pack.register.filter((row) => row.sourceIds.includes(source.id)).map((row) => row.n).join(", ") || "—",
+        ]),
+      ]),
+    );
+  }
   body.children("w\\:sectPr").before(
     styledParagraph("Heading2", "Limitations"),
     ...[...pack.limitations, ...missing.map((name) => `Template section not found: ${name}`)].map(
@@ -674,15 +687,21 @@ export async function packFolderZip(pack: Pack, store: Store): Promise<Buffer> {
 const mdCell = (value: string) =>
   value.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 export function confirmationMarkdown(pack: PackV2): string {
-  const names = sourceNames(pack);
+  const folderTitle = new Map(pack.sections.map((section) => [section.folder, section.title]));
+  const rows = pack.sources
+    .filter((source) => (source.tier || 4) > 1 && pack.register.some((row) => row.sourceIds.includes(source.id)))
+    .sort((a, b) => (a.folder || "").localeCompare(b.folder || "") || a.retrievedAt.localeCompare(b.retrievedAt));
   return [
     "# For the organisation to confirm",
     "",
-    "| # | Fact | Tier | Source | Parts | Confirmed (initials, date) |",
+    "| Organisation | Entity | Role | Compiled by | Started | Last updated | Fact checker |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
+    `| ${mdCell(pack.header.organisation)} | ${mdCell(pack.header.entity || "—")} | ${mdCell(pack.header.role)} | ${mdCell(pack.header.compiledBy)} | ${pack.header.started.slice(0, 10)} | ${pack.header.lastUpdated.slice(0, 10)} | ${mdCell(pack.header.factChecker || "Not yet named")} |`,
+    "",
+    "| Source | Folder | Tier | Facts | Confirmed by | Date |",
     "| --- | --- | --- | --- | --- | --- |",
-    ...pack.toConfirm.map(
-      (row) =>
-        `| ${row.n} | ${mdCell(row.claim)} | ${row.tier} | ${mdCell(row.sourceIds.map((id) => names.get(id) || id).join("; "))} | ${mdCell(row.parts.map((part) => partNames[part]).join("; "))} |  |`,
+    ...rows.map((source) =>
+      `| ${mdCell(source.title)} | ${mdCell(folderTitle.get(source.folder!) || source.folder || "—")} | ${source.tier || 4} | ${pack.register.filter((row) => row.sourceIds.includes(source.id)).map((row) => row.n).join(", ")} |  |  |`,
     ),
     "",
   ].join("\n");

@@ -1,7 +1,7 @@
 import { sectionStageNames, type Section, type SectionSummary } from "../../shared/types";
 import * as U from "../ui";
 
-/** Folder status colours: amber while gathering, blue when ready to extract, green once extracted, navy when reviewed. */
+/** Folder status colours: amber while gathering, green once extracted, navy when reviewed. */
 const sectionStageVariants: Record<SectionSummary["status"]["stage"], "warning" | "info" | "success" | "default"> = {
   gathering: "warning",
   complete: "info",
@@ -27,7 +27,7 @@ export function SectionsView({
   busy: boolean;
   onSelect: (section: Section) => void;
   onAdd: (section: Section, kind: "web" | "upload" | "note" | "statement") => void;
-  onStatus: (section: Section, stage: "gathering" | "complete" | "reviewed") => void;
+  onStatus: (section: Section, stage: "gathering" | "reviewed") => void;
   onExtract: (section: Section, sourceIds: string[]) => void;
 }) {
   if (loading)
@@ -40,7 +40,7 @@ export function SectionsView({
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
       {sections.map((section) => {
-        const canExtract = section.status.stage !== "gathering";
+        const canExtract = (section.readableSourceIds || section.sourceIds).length > 0;
         return (
           <U.Card
             key={section.section}
@@ -61,6 +61,12 @@ export function SectionsView({
                   <span className="block text-foreground">{section.addedSinceExtraction} added since extraction</span>
                 )}
               </U.CardDescription>
+              {!!section.sourceTitles?.length && (
+                <p className="text-p5 text-muted-foreground">
+                  {section.sourceTitles.slice(0, 3).join(" · ")}
+                  {section.sourceTitles.length > 3 ? ` and ${section.sourceTitles.length - 3} more` : ""}
+                </p>
+              )}
             </U.CardHeader>
             <U.CardContent className="space-y-3">
               <div className="flex flex-wrap gap-2" onClick={(event) => event.stopPropagation()}>
@@ -79,24 +85,16 @@ export function SectionsView({
                     ))}
                   </U.PopoverContent>
                 </U.Popover>
-                {section.status.stage !== "reviewed" && (
-                  <U.Button size="sm" variant="outline" disabled={busy} onClick={() => onStatus(section.section, section.status.stage === "gathering" ? "complete" : "gathering")}>
-                    {section.status.stage === "gathering" ? "Mark folder complete" : "Reopen folder"}
-                  </U.Button>
-                )}
                 <U.Button size="sm" disabled={!canExtract || busy} onClick={() => onExtract(section.section, section.sourceIds)}>
                   <U.IconMagicWand size={16} />Extract facts and evidence
                 </U.Button>
               </div>
-              {!canExtract && <p className="text-p5 text-muted-foreground">Mark the folder complete first</p>}
-              {canReview && section.status.stage !== "reviewed" && (
+              {!canExtract && <p className="text-p5 text-muted-foreground">Add at least one readable source first</p>}
+              {canReview && (
                 <div onClick={(event) => event.stopPropagation()}>
-                  <U.Button size="sm" variant="outline" disabled={busy || section.unreviewed > 0} onClick={() => onStatus(section.section, "reviewed")}>Mark reviewed</U.Button>
-                  {section.unreviewed > 0 && (
-                    <p className="mt-1 text-p5 text-muted-foreground">
-                      {section.unreviewed} {section.unreviewed === 1 ? "fact" : "facts"} still to review
-                    </p>
-                  )}
+                  <U.Button size="sm" variant="outline" disabled={busy} onClick={() => onStatus(section.section, section.status.stage === "reviewed" ? "gathering" : "reviewed")}>
+                    {section.status.stage === "reviewed" ? "Undo reviewed" : "Reviewed"}
+                  </U.Button>
                 </div>
               )}
             </U.CardContent>

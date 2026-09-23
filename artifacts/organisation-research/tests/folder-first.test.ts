@@ -3,7 +3,10 @@ import request from "supertest";
 import { createApp } from "../server/app.js";
 import { sectionsView } from "../server/domain.js";
 import { Store } from "../server/store.js";
-import { migrateSectionStatus } from "../server/store.js";
+import {
+  migrateSectionStatus,
+  migrateSimplifiedApproval,
+} from "../server/store.js";
 import { shouldCrawl } from "../server/research.js";
 import type { Member, Workspace } from "../shared/types.js";
 import { reviewer, sampleWorkspace } from "./fixtures.js";
@@ -35,6 +38,25 @@ describe("folder-first research", () => {
     expect(shouldCrawl({ crawl: false })).toBe(false);
     expect(shouldCrawl({})).toBe(true);
     expect(shouldCrawl({ sourceIds: [] })).toBe(false);
+  });
+
+  it("migrates legacy fact and folder approval values once", () => {
+    const legacy = sampleWorkspace();
+    legacy.findings[0].review = "clarification";
+    legacy.roles[0].sectionStatus = {
+      role: { stage: "complete", by: "old", at: "2024-01-01" },
+    };
+    expect(migrateSimplifiedApproval(legacy, "2025-03-02T00:00:00.000Z")).toBe(
+      true,
+    );
+    expect(legacy.findings[0].review).toBe("accepted");
+    expect(legacy.roles[0].sectionStatus.role?.stage).toBe("gathering");
+    expect(
+      legacy.audit.filter((entry) =>
+        entry.action.startsWith("Simplified approval migration:"),
+      ),
+    ).toHaveLength(1);
+    expect(migrateSimplifiedApproval(legacy)).toBe(false);
   });
 
   it("reports status, unreviewed facts and sources added after extraction", () => {
@@ -98,11 +120,8 @@ describe("folder-first research", () => {
     expect(legacy.roles[0].sectionStatus?.role?.at).toBe(at);
   });
 
-  it("gates reviewed status and lets a researcher mark a folder complete", async () => {
+  it("allows reviewer sign-off without preconditions and rejects complete", async () => {
     const role = fixture.roles[0];
-    await store.transact((workspace) => {
-      workspace.findings[0].slot = "role.title";
-    });
     const route = `/api/orgs/${role.orgId}/sections/role/status`;
     const denied = await request(
       createApp(store, { testMember: researcher }),
@@ -111,19 +130,31 @@ describe("folder-first research", () => {
       .send({ stage: "reviewed", roleId: role.id });
     expect(denied.status).toBe(403);
 
-    const blocked = await request(createApp(store, { testMember: reviewer }))
+    const reviewed = await request(createApp(store, { testMember: reviewer }))
       .put(route)
       .send({ stage: "reviewed", roleId: role.id });
-    expect(blocked.status).toBe(422);
-    expect(blocked.body.error).toContain("1 unreviewed");
+    expect(reviewed.status).toBe(200);
+    expect(reviewed.body.status.stage).toBe("reviewed");
+
+    const deniedUndo = await request(
+      createApp(store, { testMember: researcher }),
+    )
+      .put(route)
+      .send({ stage: "gathering", roleId: role.id });
+    expect(deniedUndo.status).toBe(403);
+
+    const undone = await request(createApp(store, { testMember: reviewer }))
+      .put(route)
+      .send({ stage: "gathering", roleId: role.id });
+    expect(undone.status).toBe(200);
+    expect(undone.body.status.stage).toBe("gathering");
 
     const complete = await request(
       createApp(store, { testMember: researcher }),
     )
       .put(route)
       .send({ stage: "complete", roleId: role.id });
-    expect(complete.status).toBe(200);
-    expect(complete.body.status.stage).toBe("complete");
+    expect(complete.status).toBe(422);
   });
 
   it("creates Markdown notes with folder and tier defaults", async () => {
@@ -147,7 +178,7 @@ describe("folder-first research", () => {
     expect(response.body.exportName).toMatch(/\.md$/);
   });
 
-  it("rejects research for a role folder without a role or before completion", async () => {
+  it("rejects research for a role folder without a role or a readable source", async () => {
     const organisation = fixture.organisations[0];
     const withoutRole = await request(
       createApp(store, { testMember: researcher }),
@@ -163,8 +194,6 @@ describe("folder-first research", () => {
       .post(`/api/organisations/${organisation.id}/research`)
       .send({ tier: "economy", sections: ["brand"] });
     expect(gathering.status).toBe(422);
-    expect(gathering.body.error).toContain(
-      "Brand: Mark the folder complete first.",
-    );
+    expect(gathering.body.error).toContain("at least one readable source");
   });
 });

@@ -28,9 +28,25 @@ const summary = (overrides: Partial<SectionSummary> = {}): SectionSummary => ({
 });
 
 describe("folder workflow safeguards", () => {
-  it("explains role and completion selection rules", () => {
+  it("allows any stage with a readable source and explains missing sources", () => {
     expect(sectionSelectionReason(summary({ roleScoped: true }), undefined)).toBe("Choose a role to use this folder");
-    expect(sectionSelectionReason(summary({ status: { stage: "gathering", by: "", at: "" } }), "role-1")).toBe("Mark the folder complete first");
+    expect(sectionSelectionReason(summary(), "role-1")).toBe("Add at least one source first");
+    expect(
+      sectionSelectionReason(
+        summary({
+          status: { stage: "gathering", by: "", at: "" },
+          sourceIds: ["source-1"],
+          readableSourceIds: ["source-1"],
+        }),
+        "role-1",
+      ),
+    ).toBeUndefined();
+    expect(
+      sectionSelectionReason(
+        summary({ sourceIds: ["broken"], readableSourceIds: [] }),
+        "role-1",
+      ),
+    ).toBe("Add at least one source first");
   });
 
   it("requires roles only for role-scoped notes", () => {

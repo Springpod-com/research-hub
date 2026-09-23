@@ -11,6 +11,42 @@ import {
   type Pack,
 } from "../shared/types.js";
 const SECTION_STATUS_MIGRATION = "section-status-from-placed-facts-v1";
+const SIMPLIFIED_APPROVAL_MIGRATION = "simplified-approval-v1";
+
+/** Normalise approval values retired by the simplified workflow. */
+export function migrateSimplifiedApproval(
+  workspace: Workspace,
+  at = new Date().toISOString(),
+): boolean {
+  workspace.migrations ||= [];
+  if (workspace.migrations.includes(SIMPLIFIED_APPROVAL_MIGRATION)) return false;
+  let facts = 0;
+  let folders = 0;
+  for (const finding of workspace.findings) {
+    if (finding.review === "unreviewed" || finding.review === "clarification") {
+      finding.review = "accepted";
+      finding.updatedAt = at;
+      facts++;
+    }
+  }
+  for (const subject of [...workspace.organisations, ...workspace.roles])
+    for (const status of Object.values(subject.sectionStatus || {}))
+      if (status?.stage === "complete") {
+        status.stage = "gathering";
+        status.by = "migration";
+        status.at = at;
+        folders++;
+      }
+  workspace.audit.push({
+    id: randomUUID(),
+    at,
+    actor: "migration",
+    action: `Simplified approval migration: registered ${facts} legacy facts; reset ${folders} legacy folders`,
+    subjectId: "workspace",
+  });
+  workspace.migrations.push(SIMPLIFIED_APPROVAL_MIGRATION);
+  return true;
+}
 
 /** Backfill only legacy placed facts; new workspaces retain gathering defaults. */
 export function migrateSectionStatus(
@@ -128,7 +164,10 @@ export class Store {
       ["main", JSON.stringify(emptyWorkspace())],
     );
     await this.moveFilesOutOfWorkspace();
-    await this.transact((workspace) => migrateSectionStatus(workspace));
+    await this.transact((workspace) => {
+      migrateSectionStatus(workspace);
+      migrateSimplifiedApproval(workspace);
+    });
   }
   // Earlier versions stored each upload as base64 inside its source record.
   // Move any that remain into research_files, once, on start-up.

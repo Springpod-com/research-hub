@@ -76,7 +76,7 @@ Creates a `statement` source (verification `client-confirmed`, folder
 `06-organisation-supplied`, text = the answer, locator = `Answer to question
 <id>`, `providedBy.name` = `answeredBy` when present, suppliedBy = the session
 name) and a finding (kind `company`, claim = `claim` or the answer, one
-citation quoting the answer, review `unreviewed`, the given slot and parts,
+citation quoting the answer, review `accepted` (shown as **Registered**), the given slot and parts,
 `runIds: []`). Returns `{ source, finding }`. Researchers and above.
 
 ### `POST /api/research` (existing) — new optional body fields
@@ -171,8 +171,10 @@ declared`; the latter permits no citations and consequently derives tier 4.
   status lives on the organisation; role, case and media status lives on the
   selected role.
 - `PUT /api/orgs/:orgId/sections/:section/status` accepts `{stage, roleId?}`.
-  Researchers may set `gathering` or `complete`. Only reviewers and
-  administrators may set `reviewed`, and only with no unreviewed facts.
+  Folder state is automatic: `gathering` until extraction and `extracted`
+  afterwards. Reviewers and administrators may add or undo the optional
+  `reviewed` tick without preconditions. The retired `complete` value is
+  rejected.
   `extracted` is worker-owned. Role id is required only for role-scoped
   sections. Every change is audited as `section.status`.
 - `POST /api/organisations/:id/sources` accepts a `note`: Markdown `text`
@@ -197,9 +199,9 @@ declared`; the latter permits no citations and consequently derives tier 4.
 review`.
 - Readiness blocks a section which has at least one filled place but remains
   gathering: `The folder for <section> has facts but was never marked
-complete.`
+readable source.`
 
-## Step 6: designer's notes and "Sources read"
+## Step 6: designer's notes and sources
 
 - `SectionNote` (`shared/types.ts`) is `{text, by, at}`; notes live on
   `Organisation.sectionNotes` (organisation, brand, supplied) and
@@ -228,7 +230,21 @@ null` for every section.
   `_No sources filed in this folder._`
 - DOCX: the same two blocks — a `Heading3` "Designer's note" with one
   paragraph per blank-line-separated block of the text, inserted straight
-  after the section heading; a `Heading3` "Sources read" and table inserted
+  after the section heading (and designer's note); a `Heading3` "Sources read"
+  and table inserted before the facts
+
+## Simplified approval
+
+- Evidence-backed facts are registered (`accepted`) as soon as they are
+  created. The only human decisions are **Exclude from the pack** (`rejected`)
+  and **Restore** (`accepted`). Legacy `unreviewed` and `clarification` values
+  remain readable but cannot be sent to the fact PATCH endpoint.
+- Pack creation has one path and is always available unless extraction for the
+  organisation and role is queued or running. Readiness checks are advisory
+  **Open items**, copied into the pack header.
+- Exports put **Sources read** at the start of each folder and add a
+  **Sources register** after the fact register. The confirmation page lists
+  tier 2–4 sources cited by registered facts, grouped by folder.
   before the next section heading (before "7. Fact register" for section 6).
 - ZIP: a folder with a note also contains `00-designers-note.md` (title line,
   `by · date`, blank line, text).

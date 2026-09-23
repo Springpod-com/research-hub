@@ -574,7 +574,7 @@ export async function processJob(store: Store, id: string) {
                      claim,
                      ...(fields ? { fields } : { fields: undefined }),
                      slot: effectiveSlot,
-                    review: "unreviewed" as const,
+                    review: "accepted" as const,
                     runIds: [runId],
                     history: [],
                   };

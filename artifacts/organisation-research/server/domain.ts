@@ -464,23 +464,12 @@ export function readiness(w: Workspace, orgId: string, roleId: string) {
         )),
   );
   const issues: string[] = [];
-  for (const section of sectionsView(w, orgId, roleId).sections)
-    if (section.filled > 0 && section.status.stage === "gathering")
-      issues.push(
-        `The folder for ${section.title} has facts but was never marked complete.`,
-      );
   if (!role.responsibilities.trim())
     issues.push("Describe the role responsibilities.");
   if (!relevant.some((f) => f.kind === "company" && f.review === "accepted"))
     issues.push(
       "Accept at least one evidence-backed fact about the organisation.",
     );
-  if (
-    relevant.some(
-      (f) => f.review === "unreviewed" || f.review === "clarification",
-    )
-  )
-    issues.push("Review outstanding facts or explicitly exclude them.");
   if (
     w.questions.some(
       (q) =>
@@ -849,6 +838,13 @@ export function sectionsView(
           (!roleId || !source.roleIds.length || source.roleIds.includes(roleId)),
       )
       .map((source) => source.id);
+    const sourceTitles = sourceIds.map(
+      (id) => w.sources.find((source) => source.id === id)?.title || id,
+    );
+    const readableSourceIds = sourceIds.filter((id) => {
+      const source = w.sources.find((item) => item.id === id);
+      return !!source?.text.trim() && !source.error;
+    });
     const status = section.roleScoped
       ? role?.sectionStatus?.[section.section] || gathering()
       : organisation.sectionStatus?.[section.section] || gathering();
@@ -878,6 +874,8 @@ export function sectionsView(
       filled: sectionSlots.filter((slot) => slot.filled).length,
       total: sectionSlots.length,
       sourceIds,
+      readableSourceIds,
+      sourceTitles,
       gaps: sectionSlots.filter((slot) => !slot.filled).map((slot) => slot.label),
       status,
       note,
@@ -1147,22 +1145,20 @@ export function makePack(
 ): Pack {
   roleInOrg(w, orgId, roleId);
   const issues = readiness(w, orgId, roleId);
-  if (status === "ready" && issues.length)
-    throw new HttpError(422, issues.join(" "));
   if (
-    status === "ready" &&
-    reviewStateOf(w, get(w.roles, roleId)).state !== "ready"
+    w.jobs.some(
+      (job) =>
+        job.orgId === orgId &&
+        (!job.roleId || job.roleId === roleId) &&
+        ["queued", "researching"].includes(job.status),
+    )
   )
-    throw new HttpError(
-      422,
-      "Mark the role profile ready (after review) before creating a ready research pack. Edits made since it was marked ready return it to draft.",
-    );
+    throw new HttpError(409, "Wait for the running extraction to finish.");
   const findings = w.findings.filter(
     (f) =>
       f.orgId === orgId &&
       (!f.roleId || f.roleId === roleId) &&
-      f.review !== "rejected" &&
-      (status === "draft" || f.review === "accepted"),
+      f.review === "accepted",
   ).map((f) => {
     const view = findingView(w, f);
     return { ...view, parts: [...new Set(view.parts || [])] };
@@ -1227,8 +1223,8 @@ export function makePack(
     revision,
     createdAt: now(),
     createdBy: actor,
-    reviewer: status === "ready" ? actor : "",
-    status,
+    reviewer: actor,
+    status: "ready",
     employerApproval: false,
     organisation,
     role,
@@ -1237,8 +1233,7 @@ export function makePack(
     activities: w.activities.filter(
       (a) =>
         a.roleId === roleId &&
-        a.review !== "rejected" &&
-        (status === "draft" || a.review === "accepted"),
+        a.review === "accepted",
     ),
     questions: w.questions.filter(
       (q) => q.orgId === orgId && (!q.roleId || q.roleId === roleId),
@@ -1249,7 +1244,6 @@ export function makePack(
       ...w.jobs
         .filter((j) => j.orgId === orgId && (!j.roleId || j.roleId === roleId))
         .flatMap((j) => j.errors),
-      "Research readiness is not the organisation's approval. Occupational context and activity ideas require validation by the organisation.",
     ],
     header: {
       organisation: organisation.name,
@@ -1394,7 +1388,8 @@ function packMarkdownV2(p: PackV2): string {
     "| Organisation | Entity | Role | Compiled by | Started | Last updated | Fact checker |",
     "| --- | --- | --- | --- | --- | --- | --- |",
     `| ${cell(p.header.organisation)} | ${cell(p.header.entity || "—")} | ${cell(p.header.role)} | ${cell(p.header.compiledBy)} | ${p.header.started.slice(0, 10)} | ${p.header.lastUpdated.slice(0, 10)} | ${cell(p.header.factChecker || "Not yet named")} |`,
-    "**Research readiness is not the organisation's approval.**",
+    "### Open items",
+    ...(p.limitations.length ? p.limitations.map((item) => `- ${item}`) : ["None"]),
     "### How to read this",
     "| Tier | Meaning |",
     "| --- | --- |",
@@ -1408,6 +1403,18 @@ function packMarkdownV2(p: PackV2): string {
         section.note.text,
         `_${section.note.by} · ${section.note.at.slice(0, 10)}_`,
       );
+    const sourceRows = sourcesReadRows(p, section);
+    out.push("### Sources read");
+    if (sourceRows.length)
+      out.push(
+        "| Source | Tier | What it gave us | Date read |",
+        "| --- | --- | --- | --- |",
+        ...sourceRows.map(
+          (row) =>
+            `| ${cell(row.source)} | ${row.tier} | ${cell(row.contribution)} | ${row.date} |`,
+        ),
+      );
+    else out.push("_No sources filed in this folder._");
     if (section.section === "brand" && p.organisation.brand) {
       const brand = p.organisation.brand;
       out.push(
@@ -1454,28 +1461,45 @@ function packMarkdownV2(p: PackV2): string {
         );
       } else out.push(...rows.map((row) => `${row.claim}\n\nTier ${row.tier} · ${row.sourceIds.map((id) => sourceNames.get(id) || id).join("; ") || "No source"} · ${row.date || "No date"} · ${row.parts.join(", ") || "No chapter parts"}`));
     }
-    const sourceRows = sourcesReadRows(p, section);
-    out.push("### Sources read");
-    if (sourceRows.length)
-      out.push(
-        "| Source | Tier | What it gave us | Date read |",
-        "| --- | --- | --- | --- |",
-        ...sourceRows.map(
-          (row) =>
-            `| ${cell(row.source)} | ${row.tier} | ${cell(row.contribution)} | ${row.date} |`,
-        ),
-      );
-    else out.push("_No sources filed in this folder._");
   });
+  const folderTitle = new Map(p.sections.map((section) => [section.folder, section.title]));
+  const orderedSources = [...p.sources].sort(
+    (a, b) =>
+      (a.folder || "").localeCompare(b.folder || "") ||
+      a.retrievedAt.localeCompare(b.retrievedAt),
+  );
+  const confirmationSources = orderedSources.filter(
+    (source) =>
+      (source.tier || 4) > 1 &&
+      p.register.some((row) => row.sourceIds.includes(source.id)),
+  );
   out.push(
     "## 7. Fact register",
     "| # | Fact | Tier | Source | Date | Parts | Verified |",
     "| --- | --- | --- | --- | --- | --- | --- |",
     ...p.register.map((row) => `| ${row.n} | ${cell(row.claim)} | ${row.tier} | ${cell(sourceText(row.sourceIds))} | ${row.date || "—"} | ${row.parts.join(", ") || "—"} | ${row.verified ? "Yes" : "No"} |`),
+    "## Sources register",
+    "| Source | Folder | Tier | Permission | Date read | Facts |",
+    "| --- | --- | --- | --- | --- | --- |",
+    ...orderedSources.map((source) => {
+      const facts = p.register.filter((row) => row.sourceIds.includes(source.id)).map((row) => row.n);
+      return `| ${cell(source.title)} | ${cell(folderTitle.get(source.folder!) || source.folder || "—")} | ${source.tier || "—"} | ${cell(source.permission)} | ${source.retrievedAt.slice(0, 10) || "—"} | ${facts.join(", ") || "—"} |`;
+    }),
     "## 8. Questions for the organisation",
     ...(p.questions.length ? p.questions.map((question) => `- ${question.text}${question.answer ? ` — ${question.answer}` : ""}`) : ["_No questions recorded._"]),
     "## For the organisation to confirm",
-    ...(p.toConfirm.length ? p.toConfirm.map((row) => `- #${row.n} ${row.claim}`) : ["_Nothing awaiting confirmation._"]),
+    ...(confirmationSources.length
+      ? [
+          "| Source | Folder | Tier | Facts | Confirmed by | Date |",
+          "| --- | --- | --- | --- | --- | --- |",
+          ...confirmationSources.map((source) => {
+            const facts = p.register.filter((row) => row.sourceIds.includes(source.id)).map((row) => row.n);
+            return `| ${cell(source.title)} | ${cell(folderTitle.get(source.folder!) || source.folder || "—")} | ${source.tier || 4} | ${facts.join(", ")} |  |  |`;
+          }),
+        ]
+      : !p.sources.length && p.toConfirm.length
+        ? p.toConfirm.map((row) => `- #${row.n} ${row.claim}`)
+        : ["_Nothing awaiting confirmation._"]),
     "## Limitations",
     ...p.limitations.map((limitation) => `- ${limitation}`),
     "## Complete research pack metadata",

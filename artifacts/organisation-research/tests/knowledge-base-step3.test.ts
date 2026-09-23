@@ -109,7 +109,8 @@ describe("knowledge-base Step 3 exports", () => {
     if (pack.schemaVersion !== "2.0.0") throw new Error("Expected PackV2");
     const markdown = confirmationMarkdown(pack);
     expect(markdown).toContain("# For the organisation to confirm");
-    expect(markdown).toContain("Confirmed (initials, date)");
+    expect(markdown).toContain("| Source | Folder | Tier | Facts | Confirmed by | Date |");
+    expect(markdown).toContain("Sample role brief — fictional");
   });
 
   it("reserves collision names across an a.txt, a.txt, a-2.txt chain", async () => {

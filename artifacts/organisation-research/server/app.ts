@@ -35,7 +35,6 @@ import {
   makePack,
   packMarkdown,
   roleView,
-  setReviewState,
   suggestOrganisations,
   captureDiff,
   captureLineage,
@@ -681,27 +680,8 @@ export function createApp(store: Store, options: AppOptions = {}) {
   );
   app.post(
     "/api/roles/:id/review-state",
-    handler(async (req, res) => {
-      const data = z
-        .object({
-          state: z.enum(["draft", "in-review", "ready"]),
-          note: z.string().trim().max(2000).default(""),
-        })
-        .parse(req.body);
-      res.json(
-        await mutate(req, res, (w, m) => {
-          const role = get(w.roles, String(req.params.id));
-          touch(role, req.body.version);
-          setReviewState(w, role, m, data.state, data.note);
-          audit(
-            w,
-            m.userId,
-            `Role profile ${data.state === "in-review" ? "sent for review" : data.state === "ready" ? "marked ready" : "returned to draft"}`,
-            role.id,
-          );
-          return roleView(w, role);
-        }),
-      );
+    handler(async () => {
+      throw new HttpError(422, "Role approval states are no longer used.");
     }),
   );
   // Official occupational reference data (bundled UK SOC 2020 and O*NET).
@@ -1444,7 +1424,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
       if (!section) throw new HttpError(404, "Section not found.");
       const data = z
         .object({
-          stage: z.enum(["gathering", "complete", "reviewed"]),
+          stage: z.enum(["gathering", "reviewed"]),
           roleId: z.string().uuid().optional(),
         })
         .parse(req.body);
@@ -1459,30 +1439,59 @@ export function createApp(store: Store, options: AppOptions = {}) {
         await mutate(req, res, (w, member) => {
           const orgId = String(req.params.orgId);
           roleInOrg(w, orgId, data.roleId);
-          const summary = sectionsView(w, orgId, data.roleId).sections.find(
-            (item) => item.section === section.section,
-          )!;
+          const subject = section.roleScoped
+            ? get(w.roles, data.roleId!)
+            : get(w.organisations, orgId);
+          const previous = subject.sectionStatus?.[section.section];
           if (
-            data.stage === "reviewed" &&
+            (data.stage === "reviewed" || previous?.stage === "reviewed") &&
             !["reviewer", "admin"].includes(member.role)
           )
             throw new HttpError(
               403,
-              "A reviewer or administrator must mark a folder reviewed.",
+              "A reviewer or administrator must change the reviewed tick.",
             );
-          if (data.stage === "reviewed" && summary.unreviewed)
-            throw new HttpError(
-              422,
-              `This folder has ${summary.unreviewed} unreviewed ${summary.unreviewed === 1 ? "fact" : "facts"}.`,
-            );
-          const subject = section.roleScoped
-            ? get(w.roles, data.roleId!)
-            : get(w.organisations, orgId);
           subject.sectionStatus ||= {};
+          const sectionSlots = new Set(
+            slots
+              .filter((slot) => slot.section === section.section)
+              .map((slot) => slot.slot),
+          );
+          const wasExtracted =
+            w.findings.some(
+              (finding) =>
+                finding.orgId === orgId &&
+                finding.review !== "rejected" &&
+                (!section.roleScoped ||
+                  !finding.roleId ||
+                  finding.roleId === data.roleId) &&
+                sectionSlots.has(finding.slot as never),
+            ) ||
+            w.jobs.some(
+              (job) =>
+                job.orgId === orgId &&
+                (!section.roleScoped || job.roleId === data.roleId) &&
+                job.sections?.includes(section.section) &&
+                ["completed", "gaps"].includes(job.status),
+            );
           subject.sectionStatus[section.section] = {
-            stage: data.stage,
+            stage:
+              data.stage === "gathering" && previous?.stage === "reviewed"
+                ? previous.reviewedFrom ||
+                  (wasExtracted ? "extracted" : "gathering")
+                : data.stage,
             by: member.userId,
             at: now(),
+            ...(data.stage === "reviewed"
+              ? {
+                  reviewedFrom:
+                    previous?.stage === "reviewed"
+                      ? previous.reviewedFrom || "gathering"
+                      : previous?.stage === "extracted"
+                        ? "extracted"
+                        : "gathering",
+                }
+              : {}),
           };
           subject.version++;
           subject.updatedAt = now();
@@ -1665,7 +1674,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
             claim,
             slot: data.slot as Finding["slot"],
             orgId,
-            review: "unreviewed" as const,
+            review: "accepted" as const,
             runIds: [],
             history: [],
           };
@@ -1684,7 +1693,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
           claim: z.string().min(1).max(8000).optional(),
           kind: z.enum(["company", "occupation", "proposal"]),
           citations: z.array(citation).max(12).optional(),
-          review,
+          review: z.enum(["accepted", "rejected"]).optional(),
           rationale: optionalText,
           slot: z
             .enum(["none", ...slots.map((slot) => slot.slot)] as [
@@ -1779,7 +1788,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
             .refine((ids) => new Set(ids).size === ids.length, {
               message: "Each fact may only be included once.",
             }),
-          review,
+          review: z.enum(["accepted", "rejected"]),
           rationale: z.string().trim().max(20000).optional(),
         })
         .parse(req.body);
@@ -1920,7 +1929,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
               },
             ],
             rationale: `Recorded from the organisation's answer to question ${question.id}.`,
-            review: "unreviewed" as const,
+            review: "accepted" as const,
             slot: data.slot as Finding["slot"],
             parts: data.parts,
             runIds: [],
@@ -2006,14 +2015,9 @@ export function createApp(store: Store, options: AppOptions = {}) {
   app.post(
     "/api/roles/:id/packs",
     handler(async (req, res) => {
-      const status = z.enum(["draft", "ready"]).parse(req.body.status);
+      z.object({ status: z.enum(["draft", "ready"]).optional() }).parse(req.body);
       res.status(201).json(
         await mutate(req, res, async (w, m, db) => {
-          if (status === "ready" && !["reviewer", "admin"].includes(m.role))
-            throw new HttpError(
-              403,
-              "A reviewer or administrator must mark a pack ready.",
-            );
           const role = get(w.roles, String(req.params.id));
           const previous = await db.query(
             "SELECT COALESCE(MAX(revision),0) AS revision FROM research_packs WHERE role_id=$1",
@@ -2024,7 +2028,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
             role.orgId,
             role.id,
             m.userId,
-            status,
+            "ready",
             Number(previous.rows[0].revision) + 1,
             m.name,
           );
@@ -2032,7 +2036,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
             "INSERT INTO research_packs(id,org_id,role_id,revision,snapshot) VALUES($1,$2,$3,$4,$5)",
             [pack.id, role.orgId, role.id, pack.revision, JSON.stringify(pack)],
           );
-          audit(w, m.userId, `Immutable ${status} pack created`, pack.id);
+          audit(w, m.userId, "Immutable pack created", pack.id);
           return pack;
         }),
       );
@@ -2130,26 +2134,21 @@ export function createApp(store: Store, options: AppOptions = {}) {
         await mutate(req, res, (w, m) => {
           const orgId = String(req.params.id);
           roleInOrg(w, orgId, data.roleId);
-          if (data.sections?.length) {
-            const summaries = sectionsView(w, orgId, data.roleId).sections;
-            for (const sectionId of data.sections) {
-              const section = sections.find(
-                (item) => item.section === sectionId,
-              )!;
-              if (section.roleScoped && !data.roleId)
-                throw new HttpError(
-                  422,
-                  `${section.title} requires a role from this organisation.`,
-                );
-              const summary = summaries.find(
-                (item) => item.section === sectionId,
-              )!;
-              if (summary.status.stage === "gathering")
-                throw new HttpError(
-                  422,
-                  `${section.title}: Mark the folder complete first.`,
-                );
-            }
+          if (data.sections?.some((sectionId) => sections.find((item) => item.section === sectionId)?.roleScoped) && !data.roleId)
+            throw new HttpError(422, "A selected folder requires a role from this organisation.");
+          for (const sectionId of data.sections || []) {
+            const folder = sections.find((item) => item.section === sectionId)!.folder;
+            if (
+              !w.sources.some(
+                (source) =>
+                  source.orgId === orgId &&
+                  sourceView(source).folder === folder &&
+                  (!data.roleId || !source.roleIds.length || source.roleIds.includes(data.roleId)) &&
+                  source.text.trim() &&
+                  !source.error,
+              )
+            )
+              throw new HttpError(422, "Each selected folder needs at least one readable source.");
           }
           if (data.sourceIds)
             for (const id of data.sourceIds) {
