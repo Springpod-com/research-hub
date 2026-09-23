@@ -1,6 +1,14 @@
 import { sectionStageNames, type Section, type SectionSummary } from "../../shared/types";
 import * as U from "../ui";
 
+/** Folder status colours: amber while gathering, blue when ready to extract, green once extracted, navy when reviewed. */
+const sectionStageVariants: Record<SectionSummary["status"]["stage"], "warning" | "info" | "success" | "default"> = {
+  gathering: "warning",
+  complete: "info",
+  extracted: "success",
+  reviewed: "default",
+};
+
 export function SectionsView({
   sections,
   selected,
@@ -44,7 +52,7 @@ export function SectionsView({
                 <U.CardTitle className="text-h6">{section.title}</U.CardTitle>
                 <div className="flex flex-wrap justify-end gap-2">
                   {section.note && <U.Badge variant="outline">Note</U.Badge>}
-                  <U.Badge variant="outline">{sectionStageNames[section.status.stage]}</U.Badge>
+                  <U.Badge variant={sectionStageVariants[section.status.stage]}>{sectionStageNames[section.status.stage]}</U.Badge>
                 </div>
               </div>
               <U.CardDescription>
