@@ -28,6 +28,10 @@ and only to set the request header.
 
 ### Contract, as confirmed against the registry's validation (2026-09-24)
 
+A successful heartbeat answers `{ ok, snapshotId, appNameMismatch,
+tierRegistered, tierDeclared, tierMismatch, tierEscalation }`; production
+logs only the tier and route count.
+
 - Required: `tier` (one of `Green`, `Yellow`, `Orange`, `Red`), `description`,
   `purpose`.
 - Arrays: `apiRoutes`, `dependencies`, `integrations`, `dataFlows`,
@@ -51,11 +55,15 @@ secrets, environment values, database contents or user data.
 ## Security tier
 
 `registeredTier` in `server/registry.ts` must equal the tier chosen when the
-app was registered at `https://app-registry.springpod.com/register`. Until it
-is set the heartbeat refuses to send rather than guess. When the MCP is
-reachable, answer the five intake questions with `classify_project` and make
-sure both agree; then `get_requirements` and `get_checks` for that tier apply
-before every publish.
+app was registered at `https://app-registry.springpod.com/register`. It is
+**Red** (owner, 2026-09-24); the registry's first heartbeat reply confirmed
+`tierRegistered: Red`, `tierDeclared: Red`, no mismatch (snapshot
+`8ce3902b-5acd-456a-abf9-8b6514626b25`). If the tier were ever unset the
+heartbeat would refuse to send rather than guess. When the MCP is reachable,
+answer the five intake questions with `classify_project` and make sure it
+agrees with Red; then `get_requirements` and `get_checks` for Red apply before
+every publish. Red is the top tier, so its requirements are cumulative over
+Green, Yellow and Orange.
 
 Facts for the intake questions: internal staff tool behind Clerk sign-in
 with workspace roles; stores material about partner organisations (public
@@ -74,6 +82,11 @@ to reach MCP server" and exposed no tools). A direct request to
 `X-MCP-Key` header in the Replit integration is missing or wrong. This was
 reported through `POST /api/feedback` (type `error`, severity `medium`,
 area `mcp`; the registry returned id `9cc80e0e-498d-4efa-ac86-7d7a228dbfa6`).
+
+The owner added the header on 2026-09-24, but the tools were still not
+exposed to the agent in that session; if they remain absent, re-run **Test &
+Save** on the integration, check the header value against the Getting
+Started page, and start a fresh agent session so the tool list is refreshed.
 
 To fix (once, workspace-wide, by a signed-in @springpod.com user):
 Integrations → MCP Servers for Replit Agent → edit **Springpod App Registry**

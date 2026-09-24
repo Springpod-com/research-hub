@@ -6,6 +6,7 @@ import {
   buildHeartbeat,
   heartbeatFields,
   heartbeatUrl,
+  registeredTier,
   registryTiers,
   reportDeploy,
   routesOf,
@@ -61,6 +62,11 @@ describe("app registry heartbeat", () => {
     expect(() => buildHeartbeat(app, undefined)).toThrow(/tier/i);
   });
 
+  it("carries the tier the app was registered with", () => {
+    expect(registeredTier).toBe("Red");
+    expect(buildHeartbeat(app, registeredTier).tier).toBe("Red");
+  });
+
   it("never carries a secret or environment value", () => {
     const serialised = JSON.stringify(buildHeartbeat(app, "Yellow"));
     for (const [key, value] of Object.entries(process.env)) {
@@ -106,9 +112,6 @@ describe("app registry heartbeat", () => {
     const log = { log: vi.fn(), warn: vi.fn() };
     expect(await reportDeploy(app, { key: "", log })).toBe(false);
     expect(log.warn.mock.calls[0][0]).toMatch(/REGISTRY_API_KEY/);
-    // Tier still unconfirmed in code: the hook reports that, not a stack trace.
-    expect(await reportDeploy(app, { key: "test-key", fetch: okFetch() as unknown as typeof fetch, log })).toBe(false);
-    expect(log.warn.mock.calls.at(-1)?.[0]).toMatch(/heartbeat failed: .*tier/i);
     const failing = vi.fn(async () => {
       throw new Error("getaddrinfo ENOTFOUND");
     });

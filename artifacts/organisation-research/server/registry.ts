@@ -59,8 +59,9 @@ export const heartbeatFields: (keyof Heartbeat)[] = [
  * and `classify_project` must agree; see docs/app-registry.md). It is a fact
  * about the app, not a deployment setting, so it lives here rather than in
  * the environment. While it is unknown the heartbeat refuses to guess.
+ * Registered as Red by the owner on 2026-09-24.
  */
-export const registeredTier: RegistryTier | undefined = undefined;
+export const registeredTier: RegistryTier | undefined = "Red";
 
 interface PackageManifest {
   name?: string;
@@ -95,7 +96,7 @@ const v = (deps: Record<string, string>, name: string) =>
 /** The descriptive profile the registry receives. Pure: safe to print. */
 export function buildHeartbeat(
   app: Express,
-  tier: RegistryTier | undefined = registeredTier,
+  tier: RegistryTier | undefined,
   pkg: PackageManifest = readPackage(),
 ): Heartbeat {
   if (!tier)
