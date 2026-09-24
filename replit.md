@@ -11,15 +11,16 @@ Springpod's internal organisation and role research workspace: researchers colle
 - `pnpm --filter @workspace/organisation-research run build:production` — typecheck + `vite build` + design audit (the deployment build command)
 - `pnpm --filter @workspace/organisation-research run start` — production: one Express process serves `dist`, `/api` and the embedded research worker on `PORT`
 - `pnpm --filter @workspace/organisation-research run demo` — fictional in-memory preview only; never deploy it
+- `pnpm --filter @workspace/organisation-research run registry:heartbeat -- --dry-run` — prints the Springpod App Registry profile; without `--dry-run` sends it (production sends automatically on start-up; `get_checks` must pass first when the MCP is reachable)
 - `pnpm --filter @workspace/organisation-research run occupations:import` — refreshes the bundled occupational datasets (`data/occupations/*.json`) from ONS SOC 2020 (OGL v3) and O*NET (CC BY 4.0); set `ONET_VERSION` / `OCC_CACHE_DIR` as needed, commit the JSON, re-run tests
 - `pnpm --filter @workspace/organisation-research run scanner` — starts the ClamAV daemon used by the upload scanner (production sidecar; needs ~1.3 GiB RAM for signatures)
-- Artifact-owned docs: `artifacts/organisation-research/docs/` (`REPLIT-HANDOVER.md`, `PRD.md`, `IMPLEMENTATION-STATUS.md`, `research-pack.schema.json`) and `artifacts/organisation-research/README.md`
+- Artifact-owned docs: `artifacts/organisation-research/docs/` (`REPLIT-HANDOVER.md`, `PRD.md`, `IMPLEMENTATION-STATUS.md`, `research-pack.schema.json`, `app-registry.md`) and `artifacts/organisation-research/README.md`
 
 ### Environment
 
 Runtime-managed: `DATABASE_URL` (the project's own Replit PostgreSQL; verified empty and dedicated before use). Shared env var: `DATABASE_CONFIRMED_STANDALONE=true`.
 
-Owner-provided values (see README table): Replit-managed Clerk keys (`CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`), `BOOTSTRAP_ADMIN_EMAILS` (verified primary email of the first administrator; `BOOTSTRAP_ADMIN_IDS` still works), Replit AI-integration proxy secrets, exact model IDs (`ECONOMY_MODEL`, `POWER_MODEL`, `MAX_CLAUDE_MODEL`, `MAX_OPENAI_MODEL` — never guessed or defaulted), production-only `UPLOAD_SCAN_COMMAND=scripts/clamav/scan-upload.sh`. Optional: `APP_ORIGINS` (defaults to `REPLIT_DOMAINS`/dev domain), `CLERK_PROXY_DISABLED=true` for a self-owned Clerk domain, `CLAMAV_SIDECAR`, `CLAMAV_RUN_DIR`, `CLAMAV_DB_DIR`, `OCCUPATION_DATA_DIR`.
+Owner-provided values (see README table): Replit-managed Clerk keys (`CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`), `BOOTSTRAP_ADMIN_EMAILS` (verified primary email of the first administrator; `BOOTSTRAP_ADMIN_IDS` still works), Replit AI-integration proxy secrets, exact model IDs (`ECONOMY_MODEL`, `POWER_MODEL`, `MAX_CLAUDE_MODEL`, `MAX_OPENAI_MODEL` — never guessed or defaulted), production-only `UPLOAD_SCAN_COMMAND=scripts/clamav/scan-upload.sh`, `REGISTRY_API_KEY` (Springpod App Registry; heartbeat on every production start, see `artifacts/organisation-research/docs/app-registry.md`). Optional: `APP_ORIGINS` (defaults to `REPLIT_DOMAINS`/dev domain), `CLERK_PROXY_DISABLED=true` for a self-owned Clerk domain, `CLAMAV_SIDECAR`, `CLAMAV_RUN_DIR`, `CLAMAV_DB_DIR`, `OCCUPATION_DATA_DIR`.
 
 ## Stack
 

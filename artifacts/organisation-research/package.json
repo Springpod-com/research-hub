@@ -13,6 +13,7 @@
     "test": "vitest run",
     "audit": "springpod-audit src",
     "occupations:import": "tsx scripts/occupations/import.mts",
+    "registry:heartbeat": "tsx scripts/registry-heartbeat.ts",
     "demo": "concurrently -k \"tsx tests/preview-server.ts\" \"vite --host 127.0.0.1\"",
     "scanner": "scripts/clamav/clamav-daemon.sh"
   },

@@ -40,6 +40,7 @@ Configure Replit Secrets:
 | `APP_ORIGINS` | Optional. Comma-separated exact allowed HTTPS origins, without trailing slashes; defaults to the Replit deployment/development domains |
 | `BOOTSTRAP_ADMIN_EMAILS` | Verified primary email address(es) of the initial administrator(s); `BOOTSTRAP_ADMIN_IDS` (Clerk user IDs) also works. Remove after provisioning |
 | `AI_INTEGRATIONS_*` | Replit AI-integration proxy keys/base URLs for Gemini, Anthropic and OpenAI (managed by Replit) |
+| `REGISTRY_API_KEY` | This app's Springpod App Registry key (shown once at registration). Used only for the deploy heartbeat and feedback; see `docs/app-registry.md` |
 | `ECONOMY_MODEL`, `POWER_MODEL`, `MAX_CLAUDE_MODEL`, `MAX_OPENAI_MODEL` | Exact API model IDs, chosen by the owner. These are the defaults; an administrator can override each one from Team & settings (see below) |
 | `UPLOAD_SCAN_COMMAND` | Production only: `scripts/clamav/scan-upload.sh` (in-project ClamAV; `CLAMAV_SIDECAR`, `CLAMAV_RUN_DIR`, `CLAMAV_DB_DIR` tune the sidecar) |
 | `OCCUPATION_DATA_DIR` | Optional. Directory of the bundled occupational datasets (defaults to `data/occupations`) |

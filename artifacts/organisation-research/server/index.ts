@@ -3,6 +3,7 @@ import { Store } from "./store.js";
 import { createApp } from "./app.js";
 import { startWorker } from "./research.js";
 import { allowedOrigins } from "./origins.js";
+import { reportDeploy } from "./registry.js";
 const production = process.env.NODE_ENV === "production";
 if (
   production &&
@@ -27,13 +28,18 @@ const store = await Store.open({
 });
 await store.init();
 const stopWorker = startWorker(store);
-const server = createApp(store, { serveFrontend: production }).listen(
+const app = createApp(store, { serveFrontend: production });
+const server = app.listen(
   Number(process.env.PORT || 3001),
   production ? "0.0.0.0" : "127.0.0.1",
-  () =>
+  () => {
     console.log(
       `Organisation Research is listening. Allowed origins: ${allowedOrigins().join(", ")}`,
-    ),
+    );
+    // Every publish starts a fresh process, so this is the deploy heartbeat
+    // the Springpod App Registry expects. It never blocks or stops the app.
+    if (production) void reportDeploy(app);
+  },
 );
 async function close() {
   stopWorker();
