@@ -1,0 +1,76 @@
+# Springpod Build — connect to the App Registry MCP
+
+You are building a Springpod app with an AI coding agent. A Springpod MCP server gives you the build
+rules, the registry contract, and the Springpod data-warehouse (DWH) schema, and it tracks this app.
+Use it actively. It is safe: it only retrieves guidance and reports a descriptive profile — it never
+sends source code, secrets, environment values, database contents, or user data.
+
+**If anything blocks, confuses, or looks wrong while you work, report it via the `report_feedback` tool
+(see step 7). That's expected — it's how the framework improves — not a failure.**
+
+## 🔑 Keys — READ THIS FIRST
+You will use two keys. BOTH live ONLY in your environment / Replit **Secrets** pane (the lock icon).
+**NEVER** paste a key into code, a file, a commit, or this prompt — anything in code or chat is treated
+as public and will be flagged by the secret scan.
+- **SPRINGPOD_MCP_KEY** — the shared, read-only key shown on the registry's Getting Started page
+  (https://app-registry.springpod.com/getting-started) to any signed-in @springpod.com user. Copy it into Secrets as `SPRINGPOD_MCP_KEY`.
+- **REGISTRY_API_KEY** — this app's own key, shown once when the app is registered at https://app-registry.springpod.com/register.
+  Put it in Secrets as `REGISTRY_API_KEY`. It authenticates this app's deploy heartbeats.
+
+When a step needs a key, reference the env var (e.g. `process.env.REGISTRY_API_KEY`) — do not write the value.
+
+## 1. Use the connected Springpod App Registry MCP
+A **Springpod App Registry** MCP is connected to this Replit workspace — added once in Integrations, it is
+**workspace-wide and available to every app** (you do NOT add it per app, and you do NOT build it). When
+this prompt tells you to "ask the MCP" or call a Springpod tool, it means **use that already-connected MCP**.
+
+Find it among the workspace's MCP servers (named **"Springpod App Registry"** or similar). Identify it by
+its tools: classify_project, get_requirements, get_guidance, get_checks, get_heartbeat_schema,
+get_dwh_schema, get_dwh_fingerprint, report_feedback. **Never write MCP client/server code into the app.**
+
+**Verify access now:** call `list_intake_questions` (or `get_dwh_fingerprint`). If it returns, you're
+connected — continue to step 2. **If those tools aren't available**, the workspace MCP isn't set up — ask a
+human to add it (once, workspace-wide): Integrations → **MCP Servers for Replit Agent** →
+**"+ Add MCP server"** → name `Springpod App Registry`, MCP Server URL `https://app-registry.springpod.com/api/mcp` →
+**Advanced settings** → header **X-MCP-Key** = the value of `SPRINGPOD_MCP_KEY` → **Test & Save**. Do not
+improvise an MCP in the meantime.
+
+## 2. At project start
+1. Call tool "classify_project" with answers to the 5 intake questions → your security tier.
+2. Call "get_requirements" with that tier → the requirements you must satisfy (cumulative).
+3. Read "guidance://topic/{id}" for the relevant topics and "brand://tokens" for styling.
+4. Record the value of "dwh://fingerprint" and the heartbeat schemaVersion from "registry://contract"
+   so you can detect changes later.
+
+## 3. Make sure this app is registered
+A Springpod staff member registers it at https://app-registry.springpod.com/register (app name, owner, owner @springpod.com
+email, tier) and stores the REGISTRY_API_KEY (shown once) in Secrets. If that hasn't happened, ask them.
+
+## 4. While building
+- Authenticate production apps by default (public pages only if explicitly requested).
+- Read ALL config and keys from environment variables / Secrets — never hard-code a secret.
+- Keep the app in git with frequent commits (use Replit's built-in git tooling).
+- If you use the DWH, call it ONLY from your backend with `DWH_API_KEY` (from Secrets) via a proxy,
+  never from the browser.
+
+## 5. Before every deploy
+1. Call "get_checks" for your tier and make each check pass before deploying.
+2. Send the deploy heartbeat: get the allowed shape from "get_heartbeat_schema", build a profile from
+   the allow-listed fields ONLY (description, purpose, techStack, apiRoutes, dependencies, dataModel
+   summary, keyDecisions, integrations, dataFlows, governanceNotes), and POST it to https://app-registry.springpod.com/api/heartbeat
+   with header `X-Registry-Key: <value of REGISTRY_API_KEY from Secrets>`. Do this on EVERY deploy.
+
+## 6. Detect changes
+Compare "dwh://fingerprint" to the value you recorded. If it changed, re-read "dwh://schema" and
+re-validate DWH-dependent code before continuing.
+
+## 7. Report problems — this is expected of you
+You are EXPECTED to send feedback whenever you hit any of these, BEFORE you work around it:
+- guidance that is unclear, contradictory, or looks wrong;
+- a check you cannot satisfy, or a rule that conflicts with another rule;
+- a DWH schema/fingerprint that doesn't match the real API;
+- an error from the MCP, the registry, or the DWH;
+- anything that blocks or confuses you while building.
+Call the MCP tool "report_feedback" (type: inconsistency | ambiguity | error | suggestion) — or POST
+https://app-registry.springpod.com/api/feedback — with a clear message, then continue with your best judgment. Reporting is
+non-blocking and always welcome; when in doubt, report it.

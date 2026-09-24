@@ -37,3 +37,6 @@ description: Non-obvious constraints met while porting the supplied Organisation
 
 The ClamAV sidecar keeps writing "SelfCheck: Database status OK" every 10 minutes after the Node process has exited, so those lines prove nothing about the app. Check for a `pg` "Connection terminated unexpectedly" stack or an `ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL … start` line, and curl `/api/health` on the production domain (a fast 500 on every path, including `/`, is the platform answering for a process that is not listening).
 **Why:** production sat at 500 for hours while the logs still scrolled; the cause was a database connection dropped while a pooled client was checked out inside a transaction, which Node treats as fatal unless the client has an error listener.
+
+## Springpod App Registry (2026-09-24)
+The workspace MCP "Springpod App Registry" needs an `X-MCP-Key` header (the shared `SPRINGPOD_MCP_KEY`); without it Replit shows "Failed to reach MCP server" and no tools. The registry's HTTP endpoints still work with `REGISTRY_API_KEY`; the heartbeat contract, tier vocabulary and pending MCP steps are in `artifacts/organisation-research/docs/app-registry.md`. Probe the heartbeat validator with `purpose` omitted so nothing is recorded.
