@@ -18,3 +18,7 @@ Create a throwaway user with Clerk's Backend API using a `+clerk_test@` email (a
 ## Screenshotting research-run states (verified 2026-09-16)
 
 The fixture workspace has no research jobs, so run states cannot be screenshotted from the stock preview server; seed hand-built jobs in a throwaway copy of the preview server (they never run — the preview has no worker — which is what makes a live "researching" state observable). A tsx script kept under /tmp must use the `.mts` extension: with `.ts` it is compiled as CommonJS (no `"type": "module"` above /tmp) and top-level `await` fails.
+
+## Real sign-in e2e, further traps (verified 2026-09-29)
+
+In the Clerk sign-in card the first button named "Continue…" is "Continue with Google"; clicking it starts an OAuth redirect and disables the whole form. Submit with `button.cl-formButtonPrimary`, and wait for `input[name='password']:not([disabled])` because a disabled password input is rendered alongside the identifier step. Users created through Clerk's Backend API get a *verified* primary email, so an invitation-by-email flow can be tested without a mailbox; only the `__session`-cookie-only sign-in path needs the 424242 device code. A `.mts` script that imports `server/store.ts` directly and uses `Store.transact` is the way to seed and clean invitations/members in the dev database.
