@@ -22,7 +22,7 @@ Try Northstar Logistics → Evidence → Inspect & review → Accept for draftin
 1. Copy `.env.example` to `.env` and configure the new Clerk application and approved origins. Never put secrets in a `VITE_` variable.
 2. Set `BOOTSTRAP_ADMIN_IDS` to the stable Clerk user ID of the initial administrator.
 3. Run `npm run dev`. The browser uses port 5173; the private API uses 3001.
-4. Sign in, then use Team & settings to add approved Clerk user IDs and application roles. Clerk identity alone does not grant access.
+4. Sign in, then use Team & settings to add approved team members by work email address, with an application role. If that address has already signed in, access starts at once; otherwise an invitation is kept and redeemed when the person first signs in (matched against the verified primary email of their Clerk account). Clerk identity alone does not grant access.
 
 Without `DATABASE_URL`, development uses a local PGlite database in `.data/research`. Production requires a new PostgreSQL database plus `DATABASE_CONFIRMED_STANDALONE=true`. The application initialises its own three tables (workspace document, immutable packs, uploaded files) and immutability trigger. Never point it at Employer Intelligence or a shared production database.
 
@@ -57,7 +57,7 @@ Activity candidates are parked for now: the default prompt asks the models not t
 
 ### Clerk SSO
 
-Create a Clerk application for this workspace. Configure the intended enterprise SSO connection and approved organisational domains in Clerk; restrict account creation to approved team members. Configure development and production domains/redirects in Clerk. Add the first administrator's verified email (or Clerk user ID) to the bootstrap setting, sign in, then provision team membership inside this app. The roles are researcher, reviewer and admin. Researchers can review findings; only reviewers/admins can mark packs ready; only admins can manage membership.
+Create a Clerk application for this workspace. Configure the intended enterprise SSO connection and approved organisational domains in Clerk; restrict account creation to approved team members. Configure development and production domains/redirects in Clerk. Add the first administrator's verified email (or Clerk user ID) to the bootstrap setting, sign in, then provision team membership inside this app by work email; pending invitations are listed under Team access and can be withdrawn. The roles are researcher, reviewer and admin. Researchers can review findings; only reviewers/admins can mark packs ready; only admins can manage membership.
 
 **SSO is not established merely by adding keys.** Test your actual identity-provider connection, unapproved accounts, revoked members, file downloads and exports in the deployed environment. Do not replace Clerk with custom authentication.
 

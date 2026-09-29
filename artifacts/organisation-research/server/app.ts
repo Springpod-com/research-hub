@@ -49,6 +49,14 @@ import {
 } from "./domain.js";
 import { buildQuotationIndex, locateQuotation } from "./quotation.js";
 import {
+  inviteByEmail,
+  lookUpClerkUserByEmail,
+  normaliseEmail,
+  redeemInvitation,
+  verifiedPrimaryEmail,
+  withdrawInvitation,
+} from "./members.js";
+import {
   datasetSummaries,
   getEntry,
   search as searchOccupations,
@@ -102,6 +110,8 @@ export interface AppOptions {
   testMember?: Member;
   preview?: boolean;
   serveFrontend?: boolean;
+  /** Finds the Clerk user ID for a work email; defaults to the Clerk API. */
+  lookUpUserByEmail?: (email: string) => Promise<string | undefined>;
 }
 const csv = (value: string | undefined) =>
   (value || "")
@@ -216,21 +226,27 @@ const requireTierReason = (data: {
  * email address of the Clerk account (BOOTSTRAP_ADMIN_EMAILS). Every later
  * member is added in the app by an administrator.
  */
-async function isBootstrapAdmin(userId: string) {
+function isBootstrapAdmin(userId: string, email: string | undefined) {
   if (csv(process.env.BOOTSTRAP_ADMIN_IDS).includes(userId)) return true;
   const emails = csv(process.env.BOOTSTRAP_ADMIN_EMAILS).map((e) =>
     e.toLowerCase(),
   );
-  if (!emails.length) return false;
-  const user = await clerkClient.users.getUser(userId);
-  const primary = user.emailAddresses.find(
-    (e) => e.id === user.primaryEmailAddressId,
-  );
-  return (
-    !!primary &&
-    primary.verification?.status === "verified" &&
-    emails.includes(primary.emailAddress.toLowerCase())
-  );
+  return !!email && emails.includes(email);
+}
+/**
+ * The verified primary email of a signed-in account, looked up once per
+ * request from someone who is not (yet) a member. A Clerk outage must not
+ * turn "no access" into a server error, so failures count as "no email".
+ */
+async function signedInEmail(userId: string): Promise<string | undefined> {
+  try {
+    return verifiedPrimaryEmail(await clerkClient.users.getUser(userId));
+  } catch (error) {
+    console.warn(
+      `[auth] could not read the Clerk account for ${userId}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return undefined;
+  }
 }
 export function createApp(store: Store, options: AppOptions = {}) {
   if (
@@ -334,28 +350,45 @@ export function createApp(store: Store, options: AppOptions = {}) {
         );
       const auth = getAuth(req);
       if (!auth.userId) throw new HttpError(401, "Sign in to your workspace.");
-      let member = (await store.read()).members.find(
-        (m) => m.userId === auth.userId,
-      );
-      if (!member && (await isBootstrapAdmin(auth.userId))) {
-        member = await store.transact((w) => {
-          const existing = w.members.find((m) => m.userId === auth.userId);
-          if (existing) return existing;
-          const item: Member = {
-            userId: auth.userId!,
-            name: "Workspace administrator",
-            role: "admin",
-            active: true,
-          };
-          w.members.push(item);
-          audit(
-            w,
-            auth.userId!,
-            "Initial administrator provisioned",
-            auth.userId!,
-          );
-          return item;
-        });
+      const userId = auth.userId;
+      const current = await store.read();
+      let member = current.members.find((m) => m.userId === userId);
+      if (!member) {
+        // Not a member yet: an invitation for this person's email, or the
+        // initial administrator, is the only way in. The Clerk account is
+        // read only when one of those could apply, and the document is only
+        // written when it does.
+        const byId = isBootstrapAdmin(userId, undefined);
+        const needsEmail =
+          !byId &&
+          (current.invitations?.length ||
+            csv(process.env.BOOTSTRAP_ADMIN_EMAILS).length);
+        const email = needsEmail ? await signedInEmail(userId) : undefined;
+        // The configured administrator always outranks an invitation, so a
+        // fresh instance can never end up without an administrator.
+        const bootstrap = byId || isBootstrapAdmin(userId, email);
+        const invited =
+          !!email && !!current.invitations?.some((i) => i.email === email);
+        if (bootstrap || invited)
+          member = await store.transact((w) => {
+            const existing = w.members.find((m) => m.userId === userId);
+            if (existing) return existing;
+            if (!bootstrap) return redeemInvitation(w, userId, email);
+            const item: Member = {
+              userId,
+              name: "Workspace administrator",
+              role: "admin",
+              active: true,
+              ...(email ? { email } : {}),
+            };
+            w.members.push(item);
+            if (email) {
+              const pending = w.invitations?.find((i) => i.email === email);
+              if (pending) withdrawInvitation(w, item, pending.id);
+            }
+            audit(w, userId, "Initial administrator provisioned", userId);
+            return item;
+          });
       }
       if (!member?.active)
         throw new HttpError(
@@ -472,6 +505,8 @@ export function createApp(store: Store, options: AppOptions = {}) {
           res.locals.member.role === "admin"
             ? w.members
             : w.members.map(({ name, userId }) => ({ name, userId })),
+        invitations:
+          res.locals.member.role === "admin" ? (w.invitations ?? []) : [],
         packs: await store.packs(),
       });
     }),
@@ -2218,22 +2253,55 @@ export function createApp(store: Store, options: AppOptions = {}) {
   app.post(
     "/api/members",
     handler(async (req, res) => {
-      const data = z
+      // Existing members are edited by Clerk user ID; new people are added
+      // by work email, which is resolved to a Clerk user ID when that account
+      // has already signed in and otherwise stored as an invitation.
+      const body = z
         .object({
-          userId: z
+          userId: z.string().regex(/^user_/).max(150).optional(),
+          email: z
             .string()
-            .regex(/^user_/)
-            .max(150),
+            .trim()
+            .pipe(z.email().max(254))
+            .transform(normaliseEmail)
+            .optional(),
           name: z.string().min(1).max(150),
           role: z.enum(["researcher", "reviewer", "admin"]),
           active: z.boolean(),
         })
+        .refine((d) => d.userId || d.email, {
+          message: "Give a work email address or a Clerk user ID.",
+        })
         .parse(req.body);
+      if (
+        res.locals.member.role !== "admin" ||
+        !(res.locals.member as Member).active
+      )
+        throw new HttpError(403, "Administrator access required.");
+      const userId =
+        body.userId ??
+        (await (options.lookUpUserByEmail ?? lookUpClerkUserByEmail)(
+          body.email!,
+        ));
       res.json(
         await mutate(
           req,
           res,
           (w, m) => {
+            if (!userId) {
+              if (!body.active)
+                throw new HttpError(
+                  422,
+                  "Nobody with that email address has signed in yet, so there is no access to revoke.",
+                );
+              return inviteByEmail(w, m, {
+                email: body.email!,
+                name: body.name,
+                role: body.role,
+              });
+            }
+            const data: Member = { ...body, userId };
+            if (!data.email) delete data.email;
             if (
               data.userId === m.userId &&
               (!data.active || data.role !== "admin") &&
@@ -2247,8 +2315,31 @@ export function createApp(store: Store, options: AppOptions = {}) {
             const existing = w.members.find((x) => x.userId === data.userId);
             if (existing) Object.assign(existing, data);
             else w.members.push(data);
+            if (data.email) {
+              const pending = (w.invitations ?? []).find(
+                (i) => i.email === data.email,
+              );
+              if (pending) withdrawInvitation(w, m, pending.id);
+            }
             audit(w, m.userId, "Workspace membership updated", data.userId);
             return data;
+          },
+          true,
+        ),
+      );
+    }),
+  );
+  app.delete(
+    "/api/invitations/:id",
+    handler(async (req, res) => {
+      res.json(
+        await mutate(
+          req,
+          res,
+          (w, m) => {
+            if (!withdrawInvitation(w, m, String(req.params.id)))
+              throw new HttpError(404, "That invitation no longer exists.");
+            return { ok: true };
           },
           true,
         ),

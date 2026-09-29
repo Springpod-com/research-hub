@@ -1843,15 +1843,22 @@ export function App({
     if (modal.type === "member")
       return (
         <FormModal
-          title="Manage team access"
-          description="Use the stable user ID from your new Clerk application. This grants access only to this research workspace."
+          title={m ? "Edit team access" : "Add a team member"}
+          description={
+            m
+              ? `Access to this research workspace only.${m.email ? ` Signed in as ${m.email}.` : ""}`
+              : "Enter the work email address the person signs in with. If they have signed in before, access starts now; otherwise it starts the first time they sign in."
+          }
           fields={[
-            {
-              name: "userId",
-              label: "Clerk user ID",
-              value: m?.userId,
-              required: true,
-            },
+            ...(m
+              ? []
+              : [
+                  {
+                    name: "email",
+                    label: "Work email address",
+                    required: true,
+                  } satisfies Field,
+                ]),
             {
               name: "name",
               label: "Display name",
@@ -1869,24 +1876,40 @@ export function App({
                 ["admin", "Administrator"],
               ],
             },
-            {
-              name: "active",
-              label: "Access",
-              value: m?.active === false ? "false" : "true",
-              kind: "select",
-              options: [
-                ["true", "Active"],
-                ["false", "Revoked"],
-              ],
-            },
+            ...(m
+              ? [
+                  {
+                    name: "active",
+                    label: "Access",
+                    value: m.active === false ? "false" : "true",
+                    kind: "select",
+                    options: [
+                      ["true", "Active"],
+                      ["false", "Revoked"],
+                    ],
+                  } satisfies Field,
+                ]
+              : []),
           ]}
           onClose={close}
-          onSubmit={async (v) =>
-            save(
-              () => post("/members", { ...v, active: v.active === "true" }),
-              "Team access saved",
-            )
-          }
+          onSubmit={async (v) => {
+            const result = (await post("/members", {
+              ...v,
+              ...(m ? { userId: m.userId } : {}),
+              active: m ? v.active === "true" : true,
+            })) as { invitedAt?: string };
+            await reload();
+            U.toast({
+              title: m
+                ? "Team access saved"
+                : result.invitedAt
+                  ? "Invitation saved"
+                  : "Team member added",
+              description: result.invitedAt
+                ? "Access starts the first time this person signs in with that address."
+                : undefined,
+            });
+          }}
         />
       );
     if (modal.type === "pack")
@@ -3413,6 +3436,34 @@ export function App({
                 )}
               </div>
             ))}
+            {session?.role === "admin" &&
+              (data?.invitations ?? []).map((i) => (
+                <div
+                  key={i.id}
+                  className="flex gap-3 justify-between items-center"
+                >
+                  <div>
+                    <p className="text-p3">{i.name}</p>
+                    <p className="text-p5 text-muted-foreground">
+                      {i.role} · Invited ({i.email}); access starts at first
+                      sign-in
+                    </p>
+                  </div>
+                  <U.Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() =>
+                      run(
+                        () => del(`/invitations/${i.id}`, {}),
+                        "Invitation withdrawn",
+                      )
+                    }
+                  >
+                    Withdraw
+                  </U.Button>
+                </div>
+              ))}
             {session?.role === "admin" && (
               <U.Button
                 variant="outline"

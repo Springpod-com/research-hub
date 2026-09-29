@@ -1,6 +1,6 @@
 # Organisation Research
 
-Springpod's internal organisation and role research workspace: researchers collect employer evidence, run tiered AI research, review findings, record client questions, match roles to official occupational data, and export immutable research packs (Markdown + JSON) for storyboard drafting. Access is restricted to approved team members via Clerk SSO plus an in-app membership list.
+Springpod's internal organisation and role research workspace: researchers collect employer evidence, run tiered AI research, review findings, record client questions, match roles to official occupational data, and export immutable research packs (Markdown + JSON) for storyboard drafting. Access is restricted to approved team members via Clerk SSO plus an in-app membership list: administrators add people by work email (Team & settings → Add team member); if that address has already signed in the member is created at once, otherwise an invitation is stored in the workspace document and redeemed on the person's first request (matched against the verified primary email of their Clerk account, like `BOOTSTRAP_ADMIN_EMAILS`).
 
 ## Run & Operate
 

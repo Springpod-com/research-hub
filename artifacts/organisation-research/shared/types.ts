@@ -482,6 +482,21 @@ export interface Member {
   name: string;
   role: "researcher" | "reviewer" | "admin";
   active: boolean;
+  /** Verified primary email of the Clerk account, lower-cased, when known. */
+  email?: string;
+}
+/**
+ * Access granted to a work email address before its owner has signed in.
+ * Redeemed (turned into a Member) on the first request from a Clerk account
+ * whose verified primary email matches.
+ */
+export interface Invitation {
+  id: string;
+  email: string;
+  name: string;
+  role: Member["role"];
+  invitedBy: string;
+  invitedAt: string;
 }
 export interface Audit {
   id: string;
@@ -514,6 +529,8 @@ export interface Workspace {
   activities: Activity[];
   jobs: ResearchJob[];
   members: Member[];
+  /** Absent in workspaces stored before email invitations existed. */
+  invitations?: Invitation[];
   audit: Audit[];
   /** Idempotent data migrations already applied to this workspace. */
   migrations?: string[];
@@ -597,6 +614,7 @@ export const emptyWorkspace = (): Workspace => ({
   activities: [],
   jobs: [],
   members: [],
+  invitations: [],
   audit: [],
   settings: { models: {} },
 });
