@@ -58,6 +58,7 @@ import {
 } from "./members.js";
 import {
   datasetSummaries,
+  automaticOccupations,
   getEntry,
   search as searchOccupations,
   schemes as occupationSchemes,
@@ -2051,6 +2052,9 @@ export function createApp(store: Store, options: AppOptions = {}) {
     "/api/roles/:id/packs",
     handler(async (req, res) => {
       z.object({ status: z.enum(["draft", "ready"]).optional() }).parse(req.body);
+      const automatic = await automaticOccupations(
+        get((await store.read()).roles, String(req.params.id)),
+      );
       res.status(201).json(
         await mutate(req, res, async (w, m, db) => {
           const role = get(w.roles, String(req.params.id));
@@ -2066,6 +2070,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
             "ready",
             Number(previous.rows[0].revision) + 1,
             m.name,
+            automatic,
           );
           await db.query(
             "INSERT INTO research_packs(id,org_id,role_id,revision,snapshot) VALUES($1,$2,$3,$4,$5)",

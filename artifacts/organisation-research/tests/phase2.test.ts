@@ -668,3 +668,65 @@ describe("Dataset match integrity", () => {
     ).toBe("confirmed");
   });
 });
+
+describe("Occupational data in every pack (Ollie, 27 Oct 2026)", () => {
+  type PackOccupation = {
+    scheme: string;
+    code: string;
+    status: string;
+    basis: string;
+    jurisdiction: string;
+    rationale: string;
+    activities: string[];
+  };
+  const strings = (o: PackOccupation) =>
+    Object.values(o).filter((v) => !Array.isArray(v));
+  it("attaches the best UK SOC and O*NET matches with their tasks when none is recorded", async () => {
+    const created = await request(app())
+      .post(`/api/organisations/${fixture.organisations[0].id}/roles`)
+      .send({
+        title: "Warehouse operative",
+        responsibilities: "Picks, packs and loads orders; checks deliveries.",
+      });
+    expect(created.status).toBe(201);
+    const pack = await request(app())
+      .post(`/api/roles/${created.body.id}/packs`)
+      .send({});
+    expect(pack.status).toBe(201);
+    const occupations: PackOccupation[] = pack.body.role.occupations;
+    expect(occupations.map((o) => o.scheme)).toEqual(["UK SOC", "O*NET"]);
+    for (const o of occupations) {
+      expect(o.status).toBe("proposed");
+      expect(o.basis).toBe("dataset-search");
+      expect(o.activities.length).toBeGreaterThan(0);
+      expect(o.rationale).toMatch(/Attached automatically/);
+      expect(strings(o).every((v) => v !== null)).toBe(true);
+    }
+    expect(occupations.map((o) => o.jurisdiction)).toEqual(["UK", "US"]);
+    const json = await request(app()).get(`/api/packs/${pack.body.id}/json`);
+    expect(JSON.parse(json.text).role.occupations).toEqual(occupations);
+    // The snapshot carries the matches; the role record is left as it was.
+    const saved = (await request(app()).get("/api/workspace")).body.roles.find(
+      (r: { id: string }) => r.id === created.body.id,
+    );
+    expect(saved.occupations).toEqual([]);
+  });
+  it("keeps a recorded match and adds only the scheme the role lacks", async () => {
+    const recorded: PackOccupation[] = (await currentRole()).occupations;
+    expect(recorded.some((o) => o.scheme === "UK SOC")).toBe(true);
+    const roleId = role().id;
+    const withoutOnet = recorded.filter((o) => o.scheme !== "O*NET");
+    await store.transact((w) => {
+      w.roles.find((r) => r.id === roleId)!.occupations = withoutOnet as never;
+    });
+    const pack = await request(app()).post(`/api/roles/${roleId}/packs`).send({});
+    expect(pack.status).toBe(201);
+    const occupations: PackOccupation[] = pack.body.role.occupations;
+    expect(occupations.filter((o) => o.scheme === "UK SOC")).toEqual(
+      withoutOnet.filter((o) => o.scheme === "UK SOC"),
+    );
+    const onet = occupations.filter((o) => o.scheme === "O*NET");
+    expect(onet).toHaveLength(1);
+    expect(onet[0].rationale).toMatch(/Attached automatically/);
+  });
+});

@@ -6,6 +6,25 @@ The question: what does Studio actually need from a research pack, what in this 
 
 ---
 
+## Decisions, 27 October 2026 (Ollie)
+
+| # | Question | Decision |
+|---|---|---|
+| 1 | Relax exact quotations to "flagged, not enforced" | **Yes** |
+| 2 | Keep the upload virus scanner (ClamAV) | **Yes, keep it** |
+| 3 | Drop the occupational data | **No. Keep it, make sure every pack includes it, and use its tasks as suggested WORK day tasks in Studio** |
+| 4 | Make readiness advisory | **Yes** |
+| 5 | Separate app or part of Studio | **Slim this app first, then migrate pack building into Studio** |
+
+How this changes the rest of the document:
+
+- **Occupations: keep, attached automatically.** Section 3 said drop; that no longer stands. Since 27 October, a pack made for a role with no recorded match carries the best UK SOC and the best O*NET match with their task statements, marked proposed. A researcher's own match for a scheme always wins. The matches go into the snapshot only; the role record is unchanged. Studio reads them and offers the tasks to the WORK day plan draft as suggestions, never as organisation facts.
+- **ClamAV: keep.** Section 3's decision row is settled.
+- **Step 10 is now the migration** of pack building into Studio, after steps 0 to 8. It replaces "Studio pulls packs by API".
+- Decisions 6 and 7 of section 6 are answered by the above; brand and media (7) was not asked and stays open.
+
+---
+
 ## 1. Summary
 
 - **Studio reads one file.** From the ZIP it opens only `knowledge-base.json` (first match at any depth). The DOCX, Markdown, the six folders, the source files and the designer's notes are never read.
@@ -106,7 +125,7 @@ Line counts are from today's source.
 | Readiness rules (rights notes, film transcripts, tier-4 rationale, measurement origin, fact checker, blocking questions) | `readiness()` in `server/domain.ts` | No | **Drop**, or keep as one advisory list |
 | Role review state (draft → in review → ready) and content fingerprint | `server/domain.ts` | No | **Drop**. Status becomes a label |
 | Source refresh, sentence diff, supersession, re-review flags | `server/app.ts`, `captureDiff`, `captureLineage` | No | **Drop**. Re-capture is just a new source |
-| Occupation matching (UK SOC + O*NET) | `server/occupations.ts` (307), `shared/occupations.ts` (65), `occupation-matcher.tsx` (523), `scripts/occupations/import.mts` (317), 4.8 MB of bundled JSON | No (and Studio has its own SOC map) | **Drop** |
+| Occupation matching (UK SOC + O*NET) | `server/occupations.ts` (307), `shared/occupations.ts` (65), `occupation-matcher.tsx` (523), `scripts/occupations/import.mts` (317), 4.8 MB of bundled JSON | Yes since 27 October (tasks suggest WORK day tasks) | **Keep**; matched automatically into every pack (see Decisions) |
 | Activity candidates (parked since 16 September) | Types, routes, `ACTIVITIES_PARKED`, export field | No | **Drop** (keep an empty `activities` key only if old consumers need it; Studio does not) |
 | Structured table rows (10 slot types with typed fields) | `slotFields`, `structuredFinding` | No (only the generated claim text is read) | **Keep claim text only**; drop typed fields except where they produce better claims |
 | Apprenticeship standard, NCS, professional body, interview, fact-checker forms | `src/App.tsx` (role and organisation forms) | No | **Drop the forms**; this material becomes ordinary sources and facts |
@@ -169,14 +188,14 @@ Each step is its own task. Each one is behaviour-preserving for Studio and has i
 | 0 | Housekeeping: delete `mockup-sandbox` and `scripts/src/hello.ts`; move `attached_assets` out of git | App builds, tests green, repo size drops |
 | 1 | Contract test against Studio's parser, including a `null` check | Test fails on a pack with a `null` summary, passes on current exports |
 | 2 | Single model and fixed prompt; remove tiers, the settings page and Max | One research run works end to end; settings routes gone |
-| 3 | Remove occupations, activities, source refresh and diff, review state and fingerprint | Pack JSON still passes the contract test; existing snapshots still download |
+| 3 | Remove activities, source refresh and diff, review state and fingerprint (occupations stay) | Pack JSON still passes the contract test; existing snapshots still download |
 | 4 | Relax the quotation gate to "flag, don't drop" | Re-run Marriott: retained facts and filled places both rise against the 17/33 baseline |
 | 5 | One Generate: parallel sections, one progress view | Marriott pack from one click |
 | 6 | One-drop upload with automatic sorting; accept SVG and WebP; raise the PDF limit | The Marriott material uploads in one action |
 | 7 | One review page; shorter organisation and role forms; drop brand and media extraction | A new pack takes about six actions |
 | 8 | Exports: JSON plus Markdown only | Studio imports it; no DOCX or folder ZIP |
 | 9 | Re-cut slots around Studio's six lessons and the WORK day plan (progression, rewards, entry routes, tools) | Studio's LEARN Generate and day plan cite more facts from a fresh pack |
-| 10 | Optional: Studio pulls packs by API | Needs a decision; Studio's CLAUDE.md currently has packs arrive by upload |
+| 10 | Migrate pack building into Studio (decided 27 October) | Needs its own plan and a Studio decision record; Studio's CLAUDE.md currently names this app as the schema owner |
 
 ---
 

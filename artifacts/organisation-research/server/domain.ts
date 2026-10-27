@@ -10,6 +10,7 @@ import type {
   Finding,
   Organisation,
   Role,
+  Occupation,
   ReviewState,
   Tier,
   Folder,
@@ -1142,6 +1143,8 @@ export function makePack(
   revision: number,
   /** The compiler's display name for the document header; the actor id is used when absent. */
   actorName?: string,
+  /** Dataset matches attached to this snapshot only, for schemes the role has none recorded. */
+  automaticOccupations: Occupation[] = [],
 ): Pack {
   roleInOrg(w, orgId, roleId);
   const issues = readiness(w, orgId, roleId);
@@ -1176,7 +1179,16 @@ export function makePack(
     )
     .map(({ blob, ...rest }) => sourceView(rest));
   const organisation = get(w.organisations, orgId);
-  const role = roleView(w, get(w.roles, roleId));
+  const recorded = roleView(w, get(w.roles, roleId));
+  const role = {
+    ...recorded,
+    occupations: [
+      ...recorded.occupations,
+      ...automaticOccupations.filter(
+        (o) => !recorded.occupations.some((r) => r.scheme === o.scheme),
+      ),
+    ],
+  };
   const sectionRows = sections.map((section) => ({
     section: section.section,
     folder: section.folder,
