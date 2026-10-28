@@ -103,29 +103,20 @@ describe("knowledge-base step 2 structured rows", () => {
 });
 
 describe("knowledge-base readiness additions", () => {
-  it("reports each missing media, tier, measurement and fact-checker requirement", () => {
+  it("lists tier-4 and measurement open items, and no longer asks for media rights, transcripts or a fact checker", () => {
     const workspace = sampleWorkspace();
     const organisation = workspace.organisations[0];
     const role = workspace.roles[0];
     const source = workspace.sources[0];
     workspace.findings[0].review = "accepted";
     organisation.factChecker = undefined;
-    workspace.sources.push(
-      {
-        ...source,
-        ...base(),
-        kind: "image",
-        title: "Workplace image",
-        text: "",
-      },
-      {
-        ...source,
-        ...base(),
-        kind: "film",
-        title: "Role film",
-        text: "",
-      },
-    );
+    workspace.sources.push({
+      ...source,
+      ...base(),
+      kind: "film",
+      title: "Role film",
+      text: "",
+    });
     workspace.findings.push(
       {
         ...workspace.findings[0],
@@ -148,34 +139,19 @@ describe("knowledge-base readiness additions", () => {
     );
 
     const issues = readiness(workspace, organisation.id, role.id);
-    expect(issues).toContain("Add a rights note to every media item.");
-    expect(issues).toContain(
-      "Add a transcript for every film, or state why there is no transcript.",
-    );
     expect(issues).toContain(
       "State that every tier-4 fact is invented or illustrative in its rationale.",
     );
     expect(issues).toContain("Add an origin to every case measurement.");
-    expect(issues).toContain(
-      "Name the organisation's fact checker or record them as not yet known.",
-    );
+    // Retired with brand and media moving to Studio (plan P1.6, 28 Oct 2026).
+    expect(issues.join(" ")).not.toMatch(/rights note|transcript|fact checker/);
   });
 
-  it("accepts recorded unknown contacts, media reasons and declared facts", () => {
+  it("accepts declared facts", () => {
     const workspace = sampleWorkspace();
     const organisation = workspace.organisations[0];
     const role = workspace.roles[0];
-    const source = workspace.sources[0];
     workspace.findings[0].review = "accepted";
-    workspace.sources.push({
-      ...source,
-      ...base(),
-      kind: "film",
-      title: "Role film",
-      text: "",
-      rights: "reference-only",
-      caption: "There is no transcript for this silent film.",
-    });
     workspace.findings.push({
       ...workspace.findings[0],
       ...base(),
@@ -187,62 +163,13 @@ describe("knowledge-base readiness additions", () => {
     });
 
     const issues = readiness(workspace, organisation.id, role.id);
-    expect(issues).not.toContain("Add a rights note to every media item.");
-    expect(issues).not.toContain(
-      "Add a transcript for every film, or state why there is no transcript.",
-    );
     expect(issues).not.toContain(
       "State that every tier-4 fact is invented or illustrative in its rationale.",
     );
     expect(issues).not.toContain("Add an origin to every case measurement.");
-    expect(issues).not.toContain(
-      "Name the organisation's fact checker or record them as not yet known.",
-    );
   });
 
-  it("uses the effective media folder for rights and transcript checks", () => {
-    const workspace = sampleWorkspace();
-    const organisation = workspace.organisations[0];
-    const role = workspace.roles[0];
-    workspace.findings[0].review = "accepted";
-    workspace.sources.push({
-      ...workspace.sources[0],
-      ...base(),
-      kind: "image",
-      folder: "05-brand",
-      title: "Brand image",
-      text: "",
-    });
-    expect(readiness(workspace, organisation.id, role.id)).not.toContain(
-      "Add a rights note to every media item.",
-    );
-    workspace.sources.push({
-      ...workspace.sources[0],
-      ...base(),
-      kind: "screenshot",
-      folder: "04-media",
-      title: "Media screenshot",
-      text: "",
-    });
-    expect(readiness(workspace, organisation.id, role.id)).toContain(
-      "Add a rights note to every media item.",
-    );
-    workspace.sources.push({
-      ...workspace.sources[0],
-      ...base(),
-      kind: "film",
-      folder: "04-media",
-      title: "Film without transcript",
-      text: "",
-      rights: "reference-only",
-      tierReason: "A tier override, not a transcript reason.",
-    });
-    expect(readiness(workspace, organisation.id, role.id)).toContain(
-      "Add a transcript for every film, or state why there is no transcript.",
-    );
-  });
-
-  it("re-checks attributed tier-1 references at readiness", () => {
+  it("no longer checks a source behind each name we may use", () => {
     const workspace = sampleWorkspace();
     const organisation = workspace.organisations[0];
     const role = workspace.roles[0];
@@ -250,9 +177,8 @@ describe("knowledge-base readiness additions", () => {
     workspace.sources[0].tier = 2;
     organisation.mayUse = [
       { text: "Northstar", sourceId: workspace.sources[0].id },
+      { text: "Manchester distribution centre" },
     ];
-    expect(readiness(workspace, organisation.id, role.id)).toContain(
-      "A name we may use or a thing we must not say cites a source that is no longer tier 1.",
-    );
+    expect(readiness(workspace, organisation.id, role.id).join(" ")).not.toMatch(/may use/);
   });
 });

@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { tierNames, type Folder, type Tier } from "../../shared/types";
+import type { Folder } from "../../shared/types";
 import * as U from "../ui";
 import { useFormCloseGuard } from "./form-close-guard";
 
@@ -9,12 +9,12 @@ export function NoteForm({ folder, roleScoped, roleId: initialRoleId, roleOption
   roleId?: string;
   roleOptions: [string, string][];
   onClose: () => void;
-  onSubmit: (value: { title: string; extractedFrom: string; text: string; tier: Tier; folder: Folder; roleId?: string }) => Promise<void>;
+  onSubmit: (value: { title: string; extractedFrom: string; text: string; fromOrganisation: boolean; folder: Folder; roleId?: string }) => Promise<void>;
 }) {
   const [title, setTitle] = useState("");
   const [extractedFrom, setExtractedFrom] = useState("");
   const [text, setText] = useState("");
-  const [tier, setTier] = useState<Tier>(2);
+  const [fromOrganisation, setFromOrganisation] = useState(false);
   const [roleId, setRoleId] = useState(initialRoleId || "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -25,7 +25,7 @@ export function NoteForm({ folder, roleScoped, roleId: initialRoleId, roleOption
     setError("");
     try {
       if (roleScoped && !roleId) throw new Error("Choose a role for this folder.");
-      await onSubmit({ title, extractedFrom, text, tier, folder, roleId: roleId || undefined });
+      await onSubmit({ title, extractedFrom, text, fromOrganisation, folder, roleId: roleId || undefined });
       onClose();
     } catch (caught) {
       setError((caught as Error).message);
@@ -54,12 +54,9 @@ export function NoteForm({ folder, roleScoped, roleId: initialRoleId, roleOption
               <p className="text-p5 text-muted-foreground">This folder belongs to a role, so choose where to file the note.</p>
             </div>
           )}
-          <div className="space-y-2">
-            <U.Label>Tier</U.Label>
-            <U.Select value={String(tier)} onValueChange={(value) => setTier(Number(value) as Tier)}>
-              <U.SelectTrigger><U.SelectValue /></U.SelectTrigger>
-              <U.SelectContent>{([1, 2, 3, 4] as Tier[]).map((value) => <U.SelectItem key={value} value={String(value)}>Tier {value} · {tierNames[value]}</U.SelectItem>)}</U.SelectContent>
-            </U.Select>
+          <div className="flex items-center gap-2">
+            <U.Checkbox id="note-from-organisation" checked={fromOrganisation} onCheckedChange={(checked) => setFromOrganisation(checked === true)} />
+            <U.Label htmlFor="note-from-organisation">This came from the organisation</U.Label>
           </div>
           {error && <U.Alert variant="destructive"><U.AlertDescription>{error}</U.AlertDescription></U.Alert>}
           <U.DialogFooter><U.Button type="button" variant="outline" disabled={busy} onClick={closeGuard.requestClose}>Cancel</U.Button><U.Button type="submit" disabled={busy}>{busy ? "Saving…" : "Save note"}</U.Button></U.DialogFooter>

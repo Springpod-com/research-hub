@@ -1,4 +1,4 @@
-import { sectionStageNames, type Section, type SectionSummary } from "../../shared/types";
+import { NOT_RESEARCHED_REASON, notResearchedSections, sectionStageNames, type Section, type SectionSummary } from "../../shared/types";
 import * as U from "../ui";
 
 /** Folder status colours: amber while gathering, green once extracted, navy when reviewed. */
@@ -40,7 +40,8 @@ export function SectionsView({
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
       {sections.map((section) => {
-        const canExtract = (section.readableSourceIds || section.sourceIds).length > 0;
+        const notResearched = notResearchedSections.includes(section.section);
+        const canExtract = !notResearched && (section.readableSourceIds || section.sourceIds).length > 0;
         return (
           <U.Card
             key={section.section}
@@ -89,7 +90,7 @@ export function SectionsView({
                   <U.IconMagicWand size={16} />Extract facts and evidence
                 </U.Button>
               </div>
-              {!canExtract && <p className="text-p5 text-muted-foreground">Add at least one readable source first</p>}
+              {!canExtract && <p className="text-p5 text-muted-foreground">{notResearched ? NOT_RESEARCHED_REASON : "Add at least one readable source first"}</p>}
               {canReview && (
                 <div onClick={(event) => event.stopPropagation()}>
                   <U.Button size="sm" variant="outline" disabled={busy} onClick={() => onStatus(section.section, section.status.stage === "reviewed" ? "gathering" : "reviewed")}>

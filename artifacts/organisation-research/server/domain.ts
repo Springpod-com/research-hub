@@ -11,6 +11,7 @@ import type {
   Organisation,
   Role,
   Occupation,
+  Attributed,
   Tier,
   Folder,
   PackV2,
@@ -79,9 +80,10 @@ const brandInput = z.object({
   photography: z.string().trim().max(8000),
   houseStyle: z.string().trim().max(8000),
 }).strict();
+// A source per line is optional since 28 Oct 2026 (plan P1.6): new lines are plain text.
 const attributedInput = z.object({
   text: text,
-  sourceId: z.string().uuid(),
+  sourceId: z.string().uuid().optional(),
 }).strict();
 export const orgPatchInput = orgInput.extend({
   factChecker: personInput.nullable().optional(),
@@ -402,9 +404,10 @@ export function structuredFinding(
 export function validateOrganisationReferences(
   sources: Source[],
   orgId: string,
-  entries: { sourceId: string }[] | null | undefined,
+  entries: { sourceId?: string }[] | null | undefined,
 ) {
   for (const entry of entries || []) {
+    if (!entry.sourceId) continue;
     const source = sources.find((item) => item.id === entry.sourceId);
     if (!source || source.orgId !== orgId || sourceView(source).tier !== 1)
       throw new HttpError(422, "Names we may use and things we must not say must cite a tier-1 source in this organisation.");
@@ -425,21 +428,8 @@ export function validateRoleReferences(
 export function readiness(w: Workspace, orgId: string, roleId: string) {
   roleInOrg(w, orgId, roleId);
   const role = get(w.roles, roleId);
-  const organisation = get(w.organisations, orgId);
   const relevant = w.findings.filter(
     (f) => f.orgId === orgId && (!f.roleId || f.roleId === roleId),
-  );
-  const packSources = w.sources.filter(
-    (s) =>
-      s.orgId === orgId &&
-      sourceView(s).folder === "04-media" &&
-      (!s.roleIds.length ||
-        s.roleIds.includes(roleId) ||
-        relevant.some(
-          (fact) =>
-            fact.review === "accepted" &&
-            fact.citations.some((citation) => citation.sourceId === s.id),
-        )),
   );
   const issues: string[] = [];
   if (!role.responsibilities.trim())
@@ -473,45 +463,6 @@ export function readiness(w: Workspace, orgId: string, roleId: string) {
     } catch {
       issues.push("Repair the evidence references for an accepted fact.");
     }
-  const mediaFacts = relevant.filter(
-    (f) => f.review === "accepted" && f.slot === "media.item",
-  );
-  try {
-    validateOrganisationReferences(
-      w.sources,
-      orgId,
-      [...(organisation.mayUse || []), ...(organisation.mustNotSay || [])],
-    );
-  } catch {
-    issues.push(
-      "A name we may use or a thing we must not say cites a source that is no longer tier 1.",
-    );
-  }
-  if (
-    packSources.some(
-      (source) => !source.rights,
-    ) ||
-    mediaFacts.some(
-      (fact) =>
-        typeof fact.fields?.rights !== "string" ||
-        !fact.fields.rights.trim(),
-    )
-  )
-    issues.push("Add a rights note to every media item.");
-  if (
-    packSources.some(
-      (source) =>
-        source.kind === "film" &&
-        !source.transcriptSourceId?.trim() &&
-        !/\bno transcript\b/i.test(source.caption || "") &&
-        !mediaFacts.some(
-          (fact) =>
-            fact.citations.some((citation) => citation.sourceId === source.id) &&
-            /\bno transcript\b/i.test(fact.rationale),
-        ),
-    )
-  )
-    issues.push("Add a transcript for every film, or state why there is no transcript.");
   if (
     relevant.some(
       (fact) =>
@@ -531,11 +482,6 @@ export function readiness(w: Workspace, orgId: string, roleId: string) {
     )
   )
     issues.push("Add an origin to every case measurement.");
-  if (
-    !organisation.factChecker ||
-    !organisation.factChecker.name.trim()
-  )
-    issues.push("Name the organisation's fact checker or record them as not yet known.");
   return [...new Set(issues)];
 }
 export function sourceView(source: Source): Source {
@@ -971,7 +917,12 @@ export function makePack(
     reviewer: actor,
     status: "ready",
     employerApproval: false,
-    organisation,
+    // Studio reads these two lists as plain text lines (plan P1.6).
+    organisation: {
+      ...organisation,
+      mayUse: textLines(organisation.mayUse),
+      mustNotSay: textLines(organisation.mustNotSay),
+    },
     role,
     findings,
     sources,
@@ -1008,6 +959,8 @@ export function makePack(
   const parsed = packSchema.parse(pack);
   return structuredClone(parsed) as unknown as Pack;
 }
+const textLines = (items: Attributed[] | null | undefined) =>
+  (items || []).map((item) => item.text.trim()).filter(Boolean);
 /** Facts kept with a quote not found word for word, named by register number. */
 function unmatchedLimitation(
   register: { n: number; findingId: string }[],
@@ -1128,8 +1081,8 @@ export function sourcesReadRows(
 function packMarkdownV2(p: PackV2): string {
   const sourceNames = new Map(p.sources.map((source) => [source.id, source.title]));
   const sourceText = (ids: string[]) => ids.map((id) => sourceNames.get(id) || id).join("; ");
-  const reference = (value: string, sourceId: string) =>
-    `- ${value} — Source: ${sourceNames.get(sourceId) || sourceId}`;
+  const reference = (value: string, sourceId?: string) =>
+    sourceId ? `- ${value} — Source: ${sourceNames.get(sourceId) || sourceId}` : `- ${value}`;
   const rowText = (
     row: PackV2["register"][number],
     columns: NonNullable<(typeof slotFields)[Slot]>,
@@ -1205,10 +1158,10 @@ function packMarkdownV2(p: PackV2): string {
         out.push(`${body.name}\n\nRegistration route: ${body.registrationRoute || "Not recorded"}\n\nFramework: ${body.frameworkUrl || "Not recorded"}`);
         referenceRendered = true;
       } else if (slot.slot === "supplied.may-use" && p.organisation.mayUse?.length) {
-        out.push(...p.organisation.mayUse.map((item) => reference(item.text, item.sourceId)));
+        out.push(...p.organisation.mayUse.map((item) => typeof item === "string" ? item : reference(item.text, item.sourceId)));
         referenceRendered = true;
       } else if (slot.slot === "supplied.must-not-say" && p.organisation.mustNotSay?.length) {
-        out.push(...p.organisation.mustNotSay.map((item) => reference(item.text, item.sourceId)));
+        out.push(...p.organisation.mustNotSay.map((item) => typeof item === "string" ? item : reference(item.text, item.sourceId)));
         referenceRendered = true;
       }
       if (!rows.length && !referenceRendered) out.push("_Not yet researched._");

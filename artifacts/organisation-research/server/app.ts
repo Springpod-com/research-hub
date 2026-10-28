@@ -67,7 +67,13 @@ import type {
   Source,
   Workspace,
 } from "../shared/types.js";
-import { sectionNoteMaxLength, sections, slots } from "../shared/types.js";
+import {
+  NOT_RESEARCHED_REASON,
+  notResearchedSections,
+  sectionNoteMaxLength,
+  sections,
+  slots,
+} from "../shared/types.js";
 import { researchReady } from "./research.js";
 import { researchModel } from "./models.js";
 import { fetchPublic, extractPage } from "./retrieval.js";
@@ -1062,6 +1068,10 @@ export function createApp(store: Store, options: AppOptions = {}) {
         })
         .parse(req.body);
       requireTierReason(uploadKnowledge);
+      // One tick since 28 Oct 2026 (plan P1.6): material that came from the
+      // organisation is confirmed by it, which makes its facts tier 1.
+      const verification =
+        req.body.fromOrganisation === "true" ? "client-confirmed" : "user-supplied";
       const ext = path.extname(f.originalname).toLowerCase();
       const textTypes: Record<string, string> = {
         ".txt": "text/plain",
@@ -1185,7 +1195,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
           text: "",
           locator: "Workplace reference image",
           permission: "awaiting-confirmation",
-          verification: "user-supplied",
+          verification,
           suppliedBy: res.locals.member.name,
           publishedAt: "",
           retrievedAt: now(),
@@ -1285,7 +1295,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
         text: content.slice(0, 100000),
         locator,
         permission: "awaiting-confirmation",
-        verification: "user-supplied",
+        verification,
         suppliedBy: res.locals.member.name,
         publishedAt: "",
         retrievedAt: now(),
@@ -2002,6 +2012,8 @@ export function createApp(store: Store, options: AppOptions = {}) {
         await mutate(req, res, (w, m) => {
           const orgId = String(req.params.id);
           roleInOrg(w, orgId, data.roleId);
+          if (data.sections?.some((sectionId) => notResearchedSections.includes(sectionId as never)))
+            throw new HttpError(422, `${NOT_RESEARCHED_REASON}.`);
           if (data.sections?.some((sectionId) => sections.find((item) => item.section === sectionId)?.roleScoped) && !data.roleId)
             throw new HttpError(422, "A selected folder requires a role from this organisation.");
           for (const sectionId of data.sections || []) {

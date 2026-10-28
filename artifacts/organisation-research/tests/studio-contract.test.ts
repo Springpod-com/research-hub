@@ -90,6 +90,26 @@ describe("Studio import contract", () => {
     expect(knowledgeBaseSchema.safeParse(pack.body).success).toBe(true);
   });
 
+  it("exports names we may use and things we must not say as text lines Studio reads", async () => {
+    // Before 28 Oct 2026 these went out as {text, sourceId} objects, which
+    // Studio's parser refuses, so any pack with them filled failed to import.
+    const source = fixture.sources[0];
+    await store.transact((w) => {
+      const org = w.organisations[0];
+      org.mayUse = [{ text: "Northstar Logistics", sourceId: source.id }, { text: "Manchester centre" }];
+      org.mustNotSay = [{ text: "Client names" }];
+    });
+    const pack = await request(app())
+      .post(`/api/roles/${fixture.roles[0].id}/packs`)
+      .send({});
+    expect(pack.body.organisation.mayUse).toEqual(["Northstar Logistics", "Manchester centre"]);
+    expect(pack.body.organisation.mustNotSay).toEqual(["Client names"]);
+    const parsed = knowledgeBaseSchema.safeParse(pack.body);
+    expect(parsed.success ? [] : parsed.error.issues).toEqual([]);
+    const markdown = await request(app()).get(`/api/packs/${pack.body.id}/md`);
+    expect(markdown.text).toContain("Manchester centre");
+  });
+
   it("is a real check: Studio refuses a null where it expects text", async () => {
     const pack = await request(app())
       .post(`/api/roles/${fixture.roles[0].id}/packs`)

@@ -176,12 +176,11 @@ it("keeps a run's supported facts, flagging unmatched quotations and excluding u
     const outside = result.findings.find(
       (f) => f.claim === "Brand claim outside the requested folder",
     );
-    expect(outside?.slot).toBe("brand.logo");
+    // Brand is set in Studio, not researched here (plan P1.6): the fact is
+    // kept in the register but not placed under Brand.
+    expect(outside?.slot).toBe("none");
     expect(result.jobs[0].errors).toContain(
-      "Placed 1 fact in other folders: Brand (1)",
-    );
-    expect(result.jobs[0].errors).toContain(
-      "Section Brand was already reviewed; new facts need review",
+      "Fact placed outside the requested folders: brand.logo → left unplaced",
     );
     expect(result.organisations[0].sectionStatus?.brand?.stage).toBe("reviewed");
     expect(result.roles[0].sectionStatus?.role?.stage).toBe("extracted");

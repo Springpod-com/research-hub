@@ -37,6 +37,13 @@ export const sections: {
   { section: "supplied", folder: "06-organisation-supplied", title: "Supplied by the organisation", roleScoped: false },
 ];
 /** The named places of the document a fact can fill; "none" keeps it in the register only. */
+/**
+ * Brand and media are set in Springpod Studio (the employer's brand settings
+ * and the media library), so they are no longer researched here (plan P1.6,
+ * 28 Oct 2026). Facts already filed under them stay readable.
+ */
+export const notResearchedSections: Section[] = ["brand", "media"];
+export const NOT_RESEARCHED_REASON = "Brand and media are set in Springpod Studio, not researched here";
 export const slots = [
   { slot: "organisation.paragraph", section: "organisation", label: "In one paragraph", table: false },
   { slot: "organisation.entity", section: "organisation", label: "The entity the learner meets", table: false },
@@ -185,7 +192,8 @@ export interface Organisation extends Base {
 }
 export interface Attributed {
   text: string;
-  sourceId: string;
+  /** Optional since 28 Oct 2026 (plan P1.6); lines saved earlier may carry one. */
+  sourceId?: string;
 }
 /** The profession's own documents for a role (plan §4.6). */
 export interface ApprenticeshipStandard {
@@ -556,7 +564,11 @@ interface PackBase {
   status: "draft" | "ready";
   /** Kept under its original key in every schema: research readiness is never the organisation's approval. */
   employerApproval: false;
-  organisation: Organisation;
+  /** Packs since 28 Oct 2026 carry may-use and must-not-say as plain text lines. */
+  organisation: Omit<Organisation, "mayUse" | "mustNotSay"> & {
+    mayUse?: (string | Attributed)[];
+    mustNotSay?: (string | Attributed)[];
+  };
   role: Role;
   findings: Finding[];
   sources: Omit<Source, "blob">[];

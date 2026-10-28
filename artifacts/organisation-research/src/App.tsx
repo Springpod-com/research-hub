@@ -13,6 +13,7 @@ import type {
   Finding,
   Question,
   Activity,
+  Attributed,
   Pack,
   Session,
   ResearchJob,
@@ -779,8 +780,10 @@ export function App({
             )
           ? "ready"
           : "draft";
-  // Creating an organisation asks only for its identity; division, summary
-  // and brand notes are added later through "Edit organisation".
+  // Creating an organisation asks only for its identity; the summary and the
+  // may-use and must-not-say lists are added through "Edit organisation".
+  // Entity, fact checker and brand fields were retired on 28 Oct 2026 (plan
+  // P1.6): their stored values are kept and sent back unchanged.
   const orgFields = (o?: Organisation): Field[] => [
     {
       name: "name",
@@ -804,11 +807,6 @@ export function App({
     ...(o
       ? ([
           {
-            name: "division",
-            label: "The entity the learner meets",
-            value: o.division,
-          },
-          {
             name: "summary",
             label: "Organisation summary",
             value: o.summary,
@@ -816,90 +814,19 @@ export function App({
             hint: "A working summary. Evidence-backed claims about the organisation are recorded separately.",
           },
           {
-            name: "brandNotes",
-            label: "Brand",
-            value: o.brandNotes,
+            name: "mayUse",
+            label: "Names we may use",
+            value: (o.mayUse || []).map((item) => item.text).join("\n"),
             kind: "textarea",
+            hint: "One per line.",
           },
           {
-            name: "factCheckerStatus",
-            label: "Who at the organisation checks facts",
-            value:
-              o.factChecker &&
-              o.factChecker.name.trim().toLowerCase() !== "not yet known"
-                ? "named"
-                : "unknown",
-            kind: "select",
-            options: [
-              ["unknown", "Not yet known"],
-              ["named", "Named contact"],
-            ],
-          },
-          {
-            name: "factCheckerName",
-            label: "Fact checker — name",
-            value: o.factChecker?.name,
-            hint: "Leave both fields blank if this is not yet known.",
-          },
-          {
-            name: "factCheckerJobTitle",
-            label: "Who at the organisation checks facts — job title",
-            value: o.factChecker?.jobTitle,
-          },
-          {
-            name: "brandGuidelines",
-            label: "Brand guidelines and where they live",
-            value: o.brand?.guidelines,
+            name: "mustNotSay",
+            label: "Things we must not say",
+            value: (o.mustNotSay || []).map((item) => item.text).join("\n"),
             kind: "textarea",
+            hint: "One per line.",
           },
-          {
-            name: "brandLogo",
-            label: "Logo rules",
-            value: o.brand?.logo,
-            kind: "textarea",
-          },
-          {
-            name: "brandPhotography",
-            label: "Photography",
-            value: o.brand?.photography,
-            kind: "textarea",
-          },
-          {
-            name: "brandHouseStyle",
-            label: "House style",
-            value: o.brand?.houseStyle,
-            kind: "textarea",
-          },
-          ...(["mayUse", "mustNotSay"] as const).flatMap((key) => {
-            const items = [...(o[key] || []), { text: "", sourceId: "none" }];
-            const heading =
-              key === "mayUse" ? "Names we may use" : "Things we must not say";
-            return items.flatMap((item, index): Field[] => [
-              {
-                name: `${key}Text${index}`,
-                label: index === 0 ? heading : `${heading} — item ${index + 1}`,
-                value: item.text,
-                hint:
-                  index === items.length - 1
-                    ? "Use the final empty row to add another item."
-                    : undefined,
-              },
-              {
-                name: `${key}Source${index}`,
-                label: `Tier-1 source for item ${index + 1}`,
-                value: item.sourceId || "none",
-                kind: "select",
-                options: [
-                  ["none", "Not selected"],
-                  ...organisationSources
-                    .filter((source) => source.tier === 1)
-                    .map(
-                      (source) => [source.id, source.title] as [string, string],
-                    ),
-                ],
-              },
-            ]);
-          }),
         ] satisfies Field[])
       : []),
   ];
@@ -926,114 +853,6 @@ export function App({
             value: r.boundaries,
             kind: "textarea",
             hint: "What can this person decide, and when must they ask for help?",
-          },
-          {
-            name: "standardName",
-            label: "Apprenticeship standard — name",
-            value: r.standard?.name,
-          },
-          {
-            name: "standardLevel",
-            label: "Apprenticeship standard — level",
-            value: r.standard?.level,
-          },
-          {
-            name: "standardDuration",
-            label: "Apprenticeship standard — duration",
-            value: r.standard?.duration,
-          },
-          {
-            name: "standardUrl",
-            label: "Apprenticeship standard — URL",
-            value: r.standard?.url,
-            validateUrl: true,
-          },
-          {
-            name: "assessmentPlanUrl",
-            label: "Assessment plan URL",
-            value: r.standard?.assessmentPlanUrl,
-            validateUrl: true,
-          },
-          {
-            name: "ncsUrl",
-            label: "National Careers Service profile URL",
-            value: r.ncsUrl,
-            validateUrl: true,
-          },
-          {
-            name: "bodyName",
-            label: "Professional body — name",
-            value: r.professionalBody?.name,
-          },
-          {
-            name: "registrationRoute",
-            label: "Professional body — registration route",
-            value: r.professionalBody?.registrationRoute,
-          },
-          {
-            name: "frameworkUrl",
-            label: "Professional body — framework URL",
-            value: r.professionalBody?.frameworkUrl,
-            validateUrl: true,
-          },
-          {
-            name: "interviewWho",
-            label: "Interview — who",
-            value: r.interview?.who,
-          },
-          {
-            name: "interviewJobTitle",
-            label: "Interview — job title",
-            value: r.interview?.jobTitle,
-          },
-          {
-            name: "timeInRole",
-            label: "Interview — time in role",
-            value: r.interview?.timeInRole,
-          },
-          {
-            name: "mayBeNamed",
-            label: "Interview — may be named",
-            value: r.interview?.mayBeNamed ? "true" : "false",
-            kind: "select",
-            options: [
-              ["false", "No"],
-              ["true", "Yes"],
-            ],
-          },
-          {
-            name: "interviewDate",
-            label: "Interview — date",
-            value: r.interview?.date,
-          },
-          {
-            name: "interviewHow",
-            label: "Interview — how it took place",
-            value: r.interview?.how,
-          },
-          {
-            name: "recordingSourceId",
-            label: "Interview — recording source",
-            value: r.interview?.recordingSourceId || "none",
-            kind: "select",
-            options: [
-              ["none", "Not selected"],
-              ...organisationSources.map(
-                (source) => [source.id, source.title] as [string, string],
-              ),
-            ],
-          },
-          {
-            name: "transcriptSourceId",
-            label: "Interview — transcript source",
-            value: r.interview?.transcriptSourceId || "none",
-            kind: "select",
-            options: [
-              ["none", "Not selected"],
-              ...organisationSources.map(
-                (source) => [source.id, source.title] as [string, string],
-              ),
-            ],
           },
         ] satisfies Field[])
       : []),
@@ -1079,54 +898,28 @@ export function App({
                 )
           }
           onSubmit={async (v) => {
-            const {
-              factCheckerStatus,
-              factCheckerName,
-              factCheckerJobTitle,
-              brandGuidelines,
-              brandLogo,
-              brandPhotography,
-              brandHouseStyle,
-              ...base
-            } = v;
-            const attributed = (key: "mayUse" | "mustNotSay") =>
-              Object.keys(v)
-                .filter((name) => name.startsWith(`${key}Text`))
-                .sort(
-                  (a, b) =>
-                    Number(a.slice(`${key}Text`.length)) -
-                    Number(b.slice(`${key}Text`.length)),
-                )
-                .map((name) => {
-                  const index = name.slice(`${key}Text`.length);
-                  return {
-                    text: v[name].trim(),
-                    sourceId: v[`${key}Source${index}`],
-                  };
-                })
-                .filter((item) => item.text);
-            const cleanBase = Object.fromEntries(
-              Object.entries(base).filter(
-                ([name]) => !/^(mayUse|mustNotSay)(Text|Source)\d+$/.test(name),
-              ),
-            );
+            // Keep a line's earlier source when its text is unchanged.
+            const lines = (value: string | undefined, earlier: Attributed[] = []) =>
+              (value || "")
+                .split("\n")
+                .map((line) => line.trim())
+                .filter(Boolean)
+                .map(
+                  (text) =>
+                    earlier.find((item) => item.text === text) || { text },
+                );
             const organisationValues = m
               ? {
-                  ...cleanBase,
-                  factChecker:
-                    factCheckerStatus === "named"
-                      ? { name: factCheckerName, jobTitle: factCheckerJobTitle }
-                      : { name: "not yet known", jobTitle: "" },
-                  brand: {
-                    guidelines: brandGuidelines,
-                    logo: brandLogo,
-                    photography: brandPhotography,
-                    houseStyle: brandHouseStyle,
-                  },
-                  mayUse: attributed("mayUse"),
-                  mustNotSay: attributed("mustNotSay"),
+                  name: v.name,
+                  website: v.website,
+                  country: v.country,
+                  summary: v.summary,
+                  division: m.division,
+                  brandNotes: m.brandNotes,
+                  mayUse: lines(v.mayUse, m.mayUse),
+                  mustNotSay: lines(v.mustNotSay, m.mustNotSay),
                 }
-              : base;
+              : v;
             const created = m
               ? await patch(`/organisations/${m.id}`, {
                   ...organisationValues,
@@ -1149,60 +942,10 @@ export function App({
           fields={roleFields(m)}
           onClose={close}
           onSubmit={async (v) => {
-            const {
-              standardName,
-              standardLevel,
-              standardDuration,
-              standardUrl,
-              assessmentPlanUrl,
-              bodyName,
-              registrationRoute,
-              frameworkUrl,
-              interviewWho,
-              interviewJobTitle,
-              timeInRole,
-              mayBeNamed,
-              interviewDate,
-              interviewHow,
-              recordingSourceId,
-              transcriptSourceId,
-              ...base
-            } = v;
-            const roleValues = m
-              ? {
-                  ...base,
-                  standard: standardName.trim()
-                    ? {
-                        name: standardName,
-                        level: standardLevel,
-                        duration: standardDuration,
-                        url: standardUrl,
-                        assessmentPlanUrl,
-                      }
-                    : null,
-                  professionalBody: bodyName.trim()
-                    ? { name: bodyName, registrationRoute, frameworkUrl }
-                    : null,
-                  interview: interviewWho.trim()
-                    ? {
-                        who: interviewWho,
-                        jobTitle: interviewJobTitle,
-                        timeInRole,
-                        mayBeNamed: mayBeNamed === "true",
-                        date: interviewDate,
-                        how: interviewHow,
-                        recordingSourceId:
-                          recordingSourceId === "none"
-                            ? undefined
-                            : recordingSourceId,
-                        transcriptSourceId:
-                          transcriptSourceId === "none"
-                            ? undefined
-                            : transcriptSourceId,
-                      }
-                    : null,
-                }
-              : base;
+            // Apprenticeship standard, careers profile, professional body and
+            // interview were retired from the form on 28 Oct 2026 (plan P1.6);
+            // leaving them out of the save keeps any stored values.
+            const roleValues = v;
             return save(
               () =>
                 m
@@ -1311,22 +1054,6 @@ export function App({
           fields={[
             { name: "title", label: "Source title", required: true },
             {
-              name: "kind",
-              label: "Source type",
-              value: "statement",
-              kind: "select",
-              options: [
-                ["statement", "Statement from the organisation or team"],
-                ["document", "Document excerpt"],
-                ["occupation", "Occupational reference"],
-                ["film", "Film"],
-                ["advert", "Job advert"],
-                ["screenshot", "Screenshot"],
-                ["standard", "Apprenticeship standard"],
-                ["guidance", "Professional guidance"],
-              ],
-            },
-            {
               name: "text",
               label: "Source passage",
               required: true,
@@ -1334,39 +1061,13 @@ export function App({
             },
             { name: "url", label: "Source URL (optional)" },
             {
-              name: "suppliedBy",
-              label: "Source or contributor name",
-              required: true,
-            },
-            {
-              name: "verification",
-              label: "Verification basis",
-              value: "user-supplied",
+              name: "fromOrganisation",
+              label: "Did this come from the organisation?",
+              value: "no",
               kind: "select",
               options: [
-                ["user-supplied", "Team-supplied information"],
-                ["client-confirmed", "Confirmed by the organisation"],
-                ["public-source", "Public source"],
-              ],
-            },
-            {
-              name: "providedByName",
-              label: "Organisation contact name (if confirmed)",
-            },
-            {
-              name: "providedByJobTitle",
-              label: "Organisation contact job title (if confirmed)",
-            },
-            {
-              name: "rights",
-              label: "Media rights",
-              value: "none",
-              kind: "select",
-              options: [
-                ["none", "Not applicable or not recorded"],
-                ["organisation-supplied", "Supplied by the organisation"],
-                ["press-kit", "Press kit"],
-                ["reference-only", "Reference only"],
+                ["no", "No"],
+                ["yes", "Yes, the organisation supplied or confirmed it"],
               ],
             },
             {
@@ -1376,7 +1077,6 @@ export function App({
               kind: "select",
               options: FOLDER_OPTIONS,
             },
-            { name: "locator", label: "Page, section or meeting reference" },
             scopeField,
           ]}
           onClose={close}
@@ -1385,23 +1085,16 @@ export function App({
               () =>
                 post(`/organisations/${org!.id}/sources`, {
                   title: v.title,
-                  kind: v.kind,
+                  kind: "statement",
                   text: v.text,
                   url: v.url,
-                  suppliedBy: v.suppliedBy,
-                  verification: v.verification,
-                  locator: v.locator,
+                  suppliedBy: session?.name || "Springpod team",
+                  verification:
+                    v.fromOrganisation === "yes"
+                      ? "client-confirmed"
+                      : "user-supplied",
                   roleIds: v.roleId === "all" ? [] : [v.roleId],
                   folder: v.folder === "auto" ? undefined : v.folder,
-                  rights: v.rights === "none" ? undefined : v.rights,
-                  providedBy:
-                    v.verification === "client-confirmed" &&
-                    v.providedByName.trim()
-                      ? {
-                          name: v.providedByName,
-                          jobTitle: v.providedByJobTitle,
-                        }
-                      : undefined,
                 }),
               "Source recorded",
             )
@@ -1460,39 +1153,18 @@ export function App({
             },
             {
               name: "caption",
-              label: "Context or image caption",
+              label: "Notes (optional)",
               kind: "textarea",
-              hint: "For photos, describe the location, relevant role and anything the image cannot establish.",
+              hint: "Anything a reader should know about this material.",
             },
             {
-              name: "verification",
-              label: "Verification basis",
-              value: "user-supplied",
+              name: "fromOrganisation",
+              label: "Did this come from the organisation?",
+              value: "no",
               kind: "select",
               options: [
-                ["user-supplied", "Team-supplied information"],
-                ["client-confirmed", "Confirmed by the organisation"],
-                ["public-source", "Public source"],
-              ],
-            },
-            {
-              name: "providedByName",
-              label: "Organisation contact name (if confirmed)",
-            },
-            {
-              name: "providedByJobTitle",
-              label: "Organisation contact job title (if confirmed)",
-            },
-            {
-              name: "rights",
-              label: "Image or film rights",
-              value: "none",
-              kind: "select",
-              options: [
-                ["none", "Not recorded"],
-                ["organisation-supplied", "Supplied by the organisation"],
-                ["press-kit", "Press kit"],
-                ["reference-only", "Reference only"],
+                ["no", "No"],
+                ["yes", "Yes, the organisation supplied or confirmed it"],
               ],
             },
             {
@@ -1540,21 +1212,8 @@ export function App({
                 form.append("title", meta.title);
                 form.append("caption", meta.caption);
                 if (meta.folder !== "auto") form.append("folder", meta.folder);
-                if (meta.rights !== "none") form.append("rights", meta.rights);
-                if (meta.tier) form.append("tier", meta.tier);
-                if (meta.tierReason) form.append("tierReason", meta.tierReason);
-                if (
-                  meta.verification === "client-confirmed" &&
-                  meta.providedByName.trim()
-                ) {
-                  form.append(
-                    "providedBy",
-                    JSON.stringify({
-                      name: meta.providedByName,
-                      jobTitle: meta.providedByJobTitle,
-                    }),
-                  );
-                }
+                if (meta.fromOrganisation === "yes")
+                  form.append("fromOrganisation", "true");
                 if (meta.roleId !== "all") form.append("roleId", meta.roleId);
                 const response = await api<Source | ZipResult>(
                   `/organisations/${org!.id}/upload`,
@@ -1637,7 +1296,9 @@ export function App({
                   url: "",
                   locator: value.extractedFrom,
                   suppliedBy: session?.name || "",
-                  verification: "public-source",
+                  verification: value.fromOrganisation
+                    ? "client-confirmed"
+                    : "user-supplied",
                   roleIds: noteRoleIds(value.folder, value.roleId),
                 }),
               "Research note saved",

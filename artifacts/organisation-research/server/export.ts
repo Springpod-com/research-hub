@@ -323,14 +323,22 @@ function fillV2($: CheerioAPI, body: Cheerio<any>, pack: PackV2) {
       rows.unshift(pack.organisation.brand.houseStyle);
     } else if (slot === "supplied.may-use" && pack.organisation.mayUse?.length) {
       rows.unshift(
-        ...pack.organisation.mayUse.map(
-          (item) => `${item.text} — ${names.get(item.sourceId) || item.sourceId}`,
+        ...pack.organisation.mayUse.map((item) =>
+          typeof item === "string"
+            ? item
+            : item.sourceId
+              ? `${item.text} — ${names.get(item.sourceId) || item.sourceId}`
+              : item.text,
         ),
       );
     } else if (slot === "supplied.must-not-say" && pack.organisation.mustNotSay?.length) {
       rows.unshift(
-        ...pack.organisation.mustNotSay.map(
-          (item) => `${item.text} — ${names.get(item.sourceId) || item.sourceId}`,
+        ...pack.organisation.mustNotSay.map((item) =>
+          typeof item === "string"
+            ? item
+            : item.sourceId
+              ? `${item.text} — ${names.get(item.sourceId) || item.sourceId}`
+              : item.text,
         ),
       );
     }

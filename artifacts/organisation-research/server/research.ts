@@ -23,7 +23,12 @@ import type {
   Source,
   ResearchJob,
 } from "../shared/types.js";
-import { slots, slotFields, sections as knowledgeSections } from "../shared/types.js";
+import {
+  notResearchedSections,
+  slots,
+  slotFields,
+  sections as knowledgeSections,
+} from "../shared/types.js";
 import { providerOf, researchModel, type ProviderKind } from "./models.js";
 const output = z.object({
   findings: z
@@ -243,6 +248,8 @@ export const INSTRUCTIONS = [
 /** The JSON shape the worker parses. */
 export const OUTPUT_CONTRACT =
   'Return ONLY valid JSON in this shape: {"findings":[{"claim":"...","kind":"company|occupation|proposal","citations":[{"sourceId":"...","quote":"exact words","locator":"page or section"}],"rationale":"scope or uncertainty","slot":"a supplied slot id|none","parts":["day|workflow|matters|call"],"fields":{"the":"table slot columns"}}],"questions":[{"text":"...","why":"...","blocking":false}]}. For every table slot return fields using exactly its listed column keys and string arrays for list columns. Never return a tier.';
+/** Brand and media slots are not offered to the model (plan P1.6). */
+const researchedSlots = slots.filter((slot) => !notResearchedSections.includes(slot.section));
 /** Pure policy kept separate so crawl choices can be checked without a network call. */
 export const shouldCrawl = (
   job: Pick<ResearchJob, "crawl" | "sourceIds">,
@@ -256,7 +263,7 @@ export const composePrompt = (
   sources: Source[],
   placesToFill: string[] = [],
 ) =>
-  `${instructions.trim()}\n${OUTPUT_CONTRACT}\nOrganisation brief: ${JSON.stringify(org)}. Role brief: ${JSON.stringify(role || null)}. Places to fill: ${JSON.stringify(placesToFill)}. Slot vocabulary: ${JSON.stringify(slots.map(({ slot, section, label }) => ({ slot, section, label, fields: slotFields[slot]?.map(({ key, list, required }) => ({ key, list: !!list, required: !!required })) })))}. SOURCES BEGIN ${JSON.stringify(sources.map((s) => ({ id: s.id, title: s.title, kind: s.kind, url: s.url, text: s.text.slice(0, 18000), locator: s.locator, verification: s.verification }))).slice(0, 150000)} SOURCES END`;
+  `${instructions.trim()}\n${OUTPUT_CONTRACT}\nOrganisation brief: ${JSON.stringify(org)}. Role brief: ${JSON.stringify(role || null)}. Places to fill: ${JSON.stringify(placesToFill)}. Slot vocabulary: ${JSON.stringify(researchedSlots.map(({ slot, section, label }) => ({ slot, section, label, fields: slotFields[slot]?.map(({ key, list, required }) => ({ key, list: !!list, required: !!required })) })))}. SOURCES BEGIN ${JSON.stringify(sources.map((s) => ({ id: s.id, title: s.title, kind: s.kind, url: s.url, text: s.text.slice(0, 18000), locator: s.locator, verification: s.verification }))).slice(0, 150000)} SOURCES END`;
 export async function processJob(store: Store, id: string) {
   let job = (await store.read()).jobs.find((j) => j.id === id)!;
   const active = async () => {
@@ -461,9 +468,11 @@ export async function processJob(store: Store, id: string) {
                   ),
                 );
                 const outsideRequestedFolders =
-                  !role &&
-                  originalSlot !== "none" &&
-                  !!generatedSection?.roleScoped;
+                  (!role &&
+                    originalSlot !== "none" &&
+                    !!generatedSection?.roleScoped) ||
+                  (!!generatedSection &&
+                    notResearchedSections.includes(generatedSection.section));
                 const effectiveSlot = outsideRequestedFolders
                   ? "none"
                   : originalSlot;
