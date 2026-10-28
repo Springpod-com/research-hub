@@ -182,6 +182,8 @@ That takes the flow from seven stages and dozens of actions to five stages and a
 
 ## 5. Suggested order of work
 
+> **Superseded on 28 October 2026** by the build plan in Studio: `plans/2026-10-28-research-pack-in-studio.md` in `Springpod-com/Springpod-Studio-Main`. That plan holds the product requirements and the phases (0 record and protect, 1 slim this app, 2 build in Studio, 3 migrate and retire). The table below is kept as the audit's original proposal. One change in the plan: new screens (one review page, several roles, the step guide) are built once, in Studio, so phase 1 here only removes features and fixes the server.
+
 Each step is its own task. Each one is behaviour-preserving for Studio and has its own check.
 
 | # | Task | Verify |
