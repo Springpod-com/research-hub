@@ -347,7 +347,13 @@ export async function processJob(store: Store, id: string) {
         s.text &&
         !s.error,
     );
-    const missing = sectionsView(w, org.id, role?.id).missing;
+    // Brand and media are set in Studio, so their gaps are not places to fill.
+    const notResearchedTitles = knowledgeSections
+      .filter((section) => notResearchedSections.includes(section.section))
+      .map((section) => `${section.title}:`);
+    const missing = sectionsView(w, org.id, role?.id).missing.filter(
+      (place) => !notResearchedTitles.some((title) => place.startsWith(title)),
+    );
     const placesFor = (chosen?: Section[]) =>
       missing.filter((place) => {
         if (!chosen?.length) return true;

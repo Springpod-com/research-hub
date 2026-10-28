@@ -2,7 +2,7 @@ import { it, expect, vi, afterEach, describe } from "vitest";
 import { Store } from "../server/store.js";
 import { processJob } from "../server/research.js";
 import { sampleWorkspace } from "./fixtures.js";
-import { base, now } from "../server/domain.js";
+import { base, makePack, now, packMarkdown } from "../server/domain.js";
 import type { Folder, ResearchJob, Section, Source, Workspace } from "../shared/types.js";
 
 // Plan P1.5 (28 Oct 2026): one run researches every chosen section, one
@@ -155,6 +155,70 @@ describe("One Generate", () => {
       const result = await store.read();
       expect(result.findings).toEqual([]);
       expect(result.jobs[0].status).toBe("cancelled");
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("fills the places Studio needs and never offers brand or media (plans P1.6 and P1.8)", async () => {
+    vi.stubEnv("RESEARCH_MODEL", "claude-test");
+    vi.stubEnv("ANTHROPIC_API_KEY", "test-key");
+    const store = await Store.open();
+    await store.init();
+    try {
+      const { w, sources } = workspaceWithFolders();
+      const j = job(w, ["role", "case"]);
+      w.jobs = [j];
+      await store.transact((state) => Object.assign(state, w));
+      const roleSource = sources.find((item) => item.folder === "02-role")!;
+      const caseSource = sources.find((item) => item.folder === "03-case-material")!;
+      const prompts: string[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_url: string, init: RequestInit) => {
+          const prompt: string = JSON.parse(String(init.body)).messages[0].content;
+          prompts.push(prompt);
+          const cite = (source: Source) => [{ sourceId: source.id, quote: source.text, locator: "Notes" }];
+          const findings = prompt.includes("Places to fill: [\"The role:")
+            ? [
+                { claim: "Most start through a level 2 apprenticeship.", kind: "company", citations: cite(roleSource), rationale: "", slot: "role.entry-routes" },
+                { claim: "Coordinators can become shift supervisors.", kind: "company", citations: cite(roleSource), rationale: "", slot: "role.progression" },
+                { claim: "People value fixing a delivery problem before it reaches a shop.", kind: "company", citations: cite(roleSource), rationale: "", slot: "role.rewards" },
+              ]
+            : [
+                { claim: "Deliveries are booked in on the warehouse management system.", kind: "company", citations: cite(caseSource), rationale: "", slot: "case.tools" },
+              ];
+          return new Response(
+            JSON.stringify({
+              content: [{ type: "text", text: JSON.stringify({ findings, questions: [] }) }],
+              usage: { input_tokens: 10, output_tokens: 5 },
+            }),
+            { status: 200 },
+          );
+        }),
+      );
+
+      await processJob(store, j.id);
+      const result = await store.read();
+      expect(result.findings.map((f) => f.slot).sort()).toEqual([
+        "case.tools",
+        "role.entry-routes",
+        "role.progression",
+        "role.rewards",
+      ]);
+      for (const prompt of prompts) {
+        expect(prompt).toContain('"slot":"role.progression"');
+        expect(prompt).toContain('"slot":"case.tools"');
+        expect(prompt).not.toContain('"slot":"brand.logo"');
+        expect(prompt).not.toContain('"slot":"media.item"');
+        expect(prompt).not.toMatch(/"(Brand|Media):/);
+      }
+      const role = result.roles[0];
+      const pack = makePack(result, role.orgId, role.id, "user_admin", "ready", 1);
+      const markdown = packMarkdown(pack);
+      expect(markdown).toContain("### Routes into the role");
+      expect(markdown).toContain("Coordinators can become shift supervisors.");
+      expect(markdown).toContain("### Tools and screens the work happens in");
     } finally {
       await store.close();
     }
