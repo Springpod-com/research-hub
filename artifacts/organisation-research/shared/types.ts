@@ -479,6 +479,8 @@ export interface ResearchJob extends Base {
   runs: {
     id: string;
     model: string;
+    /** The section this analysis researched (one per section since 28 Oct 2026). */
+    section?: Section;
     status: string;
     findings: number;
     inputTokens: number;

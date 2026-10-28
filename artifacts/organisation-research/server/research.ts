@@ -19,9 +19,9 @@ import {
 import { fetchPublic, extractPage } from "./retrieval.js";
 import type {
   Citation,
+  Section,
   Source,
   ResearchJob,
-  Workspace,
 } from "../shared/types.js";
 import { slots, slotFields, sections as knowledgeSections } from "../shared/types.js";
 import { providerOf, researchModel, type ProviderKind } from "./models.js";
@@ -340,49 +340,77 @@ export async function processJob(store: Store, id: string) {
         s.text &&
         !s.error,
     );
-    const wantedFolders = new Set(
-      job.sections?.flatMap((section) => {
-        const found = knowledgeSections.find((item) => item.section === section);
-        return found ? [found.folder] : [];
-      }),
-    );
-    if (job.sections?.length) wantedFolders.add("01-organisation");
-    const sources = (
-      job.sourceIds
-        ? job.sourceIds.map((sourceId) => readable.find((source) => source.id === sourceId)).filter(Boolean)
-        : job.sections?.length
-          ? readable.filter((source) => wantedFolders.has(sourceView(source).folder!)).slice(-16)
-          : readable.slice(-16)
-    ) as Source[];
-    if (!sources.length)
+    const missing = sectionsView(w, org.id, role?.id).missing;
+    const placesFor = (chosen?: Section[]) =>
+      missing.filter((place) => {
+        if (!chosen?.length) return true;
+        const title = place.split(":")[0];
+        return knowledgeSections.some(
+          (section) => chosen.includes(section.section) && section.title === title,
+        );
+      });
+    const newestFirst = (items: Source[]) =>
+      [...items].sort((a, b) => b.retrievedAt.localeCompare(a.retrievedAt));
+    const folderOf = (source: Source) => sourceView(source).folder!;
+    // One Generate (plan P1.5, 28 Oct 2026): several chosen sections are
+    // researched as one analysis each, in parallel, so each reads its own
+    // folder first and a failure in one section keeps the others' results.
+    type Unit = { section?: Section; sources: Source[]; places: string[] };
+    const units: Unit[] = job.sourceIds
+      ? [
+          {
+            sources: job.sourceIds
+              .map((sourceId) => readable.find((source) => source.id === sourceId))
+              .filter(Boolean) as Source[],
+            places: placesFor(job.sections),
+          },
+        ]
+      : job.sections?.length
+        ? job.sections.map((sectionId) => {
+            const folder = knowledgeSections.find((item) => item.section === sectionId)!.folder;
+            const own = newestFirst(readable.filter((source) => folderOf(source) === folder));
+            const context =
+              folder === "01-organisation"
+                ? []
+                : newestFirst(readable.filter((source) => folderOf(source) === "01-organisation"));
+            return {
+              section: sectionId,
+              sources: [...own, ...context].slice(0, 16),
+              places: placesFor([sectionId]),
+            };
+          })
+        : [{ sources: readable.slice(-16), places: placesFor() }];
+    const skipped = units.filter((unit) => !unit.sources.length);
+    const runnable = units.filter((unit) => unit.sources.length);
+    if (!runnable.length)
       throw new Error(
         "No readable sources available. Add a document, recorded statement or public page, then retry.",
       );
+    const sectionTitle = (sectionId?: Section) =>
+      knowledgeSections.find((item) => item.section === sectionId)?.title;
+    if (skipped.length)
+      await update((j) => {
+        for (const unit of skipped)
+          j.errors.push(`${sectionTitle(unit.section)}: no readable sources, so it was not researched.`);
+      });
     const models = [modelForResearch()];
-    const researchPrompt = composePrompt(
-      INSTRUCTIONS,
-      org,
-      role,
-      sources,
-      sectionsView(w, org.id, role?.id).missing.filter((missing) => {
-        if (!job.sections?.length) return true;
-        const title = missing.split(":")[0];
-        return knowledgeSections.some(
-          (section) => job.sections!.includes(section.section) && section.title === title,
-        );
-      }),
-    );
     let succeeded = 0;
+    const succeededSections = new Set<Section>();
     await update((j) => {
-      j.stage = "Analysing evidence and drafting candidates";
+      j.stage =
+        runnable.length > 1
+          ? `Analysing ${runnable.length} sections in parallel`
+          : "Analysing evidence and drafting candidates";
     });
     await Promise.allSettled(
-      models.map(async (model) => {
+      models.flatMap((model) => runnable.map((unit) => ({ model, unit }))).map(async ({ model, unit }) => {
         const runId = randomUUID();
+        const researchPrompt = composePrompt(INSTRUCTIONS, org, role, unit.sources, unit.places);
         await update((j) =>
           j.runs.push({
             id: runId,
             model,
+            ...(unit.section ? { section: unit.section } : {}),
             status: "running",
             findings: 0,
             inputTokens: 0,
@@ -538,16 +566,25 @@ export async function processJob(store: Store, id: string) {
             audit(state, j.requestedBy, `Research results: ${model}`, j.id);
           });
           succeeded++;
+          if (unit.section) succeededSections.add(unit.section);
         } catch (e) {
           await update((j) => {
-            j.errors.push(`${model}: ${(e as Error).message}`);
+            j.errors.push(
+              `${unit.section ? `${sectionTitle(unit.section)}: ` : ""}${model}: ${(e as Error).message}`,
+            );
             const run = j.runs.find((r) => r.id === runId);
             if (run) run.status = "failed";
           });
         }
       }),
     );
-    if (succeeded && job.sections?.length)
+    // Sections whose own analysis succeeded; a source-picked run covers them all.
+    const extracted = job.sourceIds
+      ? succeeded
+        ? job.sections || []
+        : []
+      : (job.sections || []).filter((sectionId) => succeededSections.has(sectionId));
+    if (extracted.length)
       await store.transact((state) => {
         const current = get(state.jobs, id);
         const organisation = get(state.organisations, job.orgId);
@@ -555,7 +592,7 @@ export async function processJob(store: Store, id: string) {
           ? get(state.roles, job.roleId)
           : undefined;
         const at = now();
-        for (const sectionId of job.sections!) {
+        for (const sectionId of extracted) {
           const section = knowledgeSections.find(
             (item) => item.section === sectionId,
           );

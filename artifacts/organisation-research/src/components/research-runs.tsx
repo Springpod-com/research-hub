@@ -1,5 +1,8 @@
 import { useEffect, useState, type ReactNode } from "react";
-import type { ResearchJob, Role } from "../../shared/types";
+import { sections, type ResearchJob, type Role, type Section } from "../../shared/types";
+
+const sectionTitle = (section: Section) =>
+  sections.find((item) => item.section === section)?.title || section;
 import * as U from "../ui";
 import { WhatsThis } from "./whats-this";
 
@@ -182,6 +185,7 @@ export function RunCard({
         <div className="space-y-1">
           {j.runs.map((r) => (
             <p key={r.id} className="text-p5 text-muted-foreground">
+              {r.section ? `${sectionTitle(r.section)} · ` : ""}
               {r.model}: {r.status} · {r.findings} facts ·{" "}
               {r.inputTokens + r.outputTokens} tokens
             </p>

@@ -52,6 +52,9 @@ export function ResearchDialog({
   const [sectionData, setSectionData] = useState<SectionsResponse>();
   const [chosenSections, setChosenSections] = useState<Section[]>([]);
   const [sourceIds, setSourceIds] = useState<string[]>([]);
+  // Picked by hand: the run then reads exactly these in one analysis.
+  // Otherwise each chosen section is researched separately (plan P1.5).
+  const [sourcesPicked, setSourcesPicked] = useState(!!initialSourceIds);
   const [crawl, setCrawl] = useState(false);
   const [initial] = useState({ scope });
   const dirty =
@@ -82,11 +85,7 @@ export function ResearchDialog({
               )
               .map((section) => section.section)
           : result.sections
-              .filter(
-                (section) =>
-                  section.gaps.length &&
-                  !sectionSelectionReason(section, roleId),
-              )
+              .filter((section) => !sectionSelectionReason(section, roleId))
               .map((section) => section.section);
         setChosenSections(defaults);
       })
@@ -275,10 +274,10 @@ export function ResearchDialog({
               Sources to read ({sourceIds.length}/16)
             </legend>
             <p className="text-p5 text-muted-foreground">
-              Sources from the chosen folders and The organisation are selected
-              automatically, up to 16. For a single folder, its own sources come
-              first, followed by organisation context. Untick any the run should
-              not read.
+              Each chosen section is researched separately and at the same
+              time, reading its own sources first and then organisation
+              context. Untick a source to choose exactly what one combined
+              analysis reads instead (up to 16).
             </p>
             <div className="max-h-48 overflow-y-auto space-y-2 rounded-xl border border-border p-3">
               {eligibleSources.map((source) => (
@@ -288,13 +287,14 @@ export function ResearchDialog({
                     disabled={
                       !sourceIds.includes(source.id) && sourceIds.length >= 16
                     }
-                    onCheckedChange={(checked) =>
+                    onCheckedChange={(checked) => {
+                      setSourcesPicked(true);
                       setSourceIds((current) =>
                         checked
                           ? [...current, source.id].slice(0, 16)
                           : current.filter((id) => id !== source.id),
-                      )
-                    }
+                      );
+                    }}
                   />
                   {source.title}
                 </label>
@@ -387,7 +387,7 @@ export function ResearchDialog({
                 await onStart(
                   roleId,
                   chosenSections.length ? chosenSections : undefined,
-                  sourceIds.length ? sourceIds : undefined,
+                  sourcesPicked && sourceIds.length ? sourceIds : undefined,
                   crawl,
                 );
                 onClose();
