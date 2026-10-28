@@ -5,7 +5,8 @@
  * schema refuses, so every export here must pass it (plan P0.2). When Studio
  * changes its parser, copy it again.
  */
-import { z } from "zod";
+// Studio runs zod 3; zod 4's v3 entry gives the same parsing behaviour.
+import { z } from "zod/v3";
 
 /**
  * Research pack: the organisation knowledge base produced by the separate

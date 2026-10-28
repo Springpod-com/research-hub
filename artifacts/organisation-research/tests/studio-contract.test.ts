@@ -28,10 +28,14 @@ afterAll(async () => {
 });
 const app = () => createApp(store, { testMember: reviewer });
 
-const binary = (res: NodeJS.ReadableStream, callback: (error: Error | null, body: Buffer) => void) => {
+const binary = (
+  res: request.Response,
+  callback: (error: Error | null, body: Buffer) => void,
+) => {
+  const stream = res as unknown as NodeJS.ReadableStream;
   const chunks: Buffer[] = [];
-  res.on("data", (chunk: Buffer) => chunks.push(chunk));
-  res.on("end", () => callback(null, Buffer.concat(chunks)));
+  stream.on("data", (chunk: Buffer) => chunks.push(chunk));
+  stream.on("end", () => callback(null, Buffer.concat(chunks)));
 };
 
 describe("Studio import contract", () => {
