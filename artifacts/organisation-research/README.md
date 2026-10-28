@@ -61,7 +61,7 @@ Create a Clerk application for this workspace. Configure the intended enterprise
 
 ### File uploads
 
-PDF, DOCX, TXT, Markdown (.md), PNG and JPEG up to 10 MB are supported. A quotation is accepted when its wording appears verbatim in the source's captured text; only line breaks, spacing and typographic quotation marks are ignored, so passages can be copied from the live page or the capture. Sources without captured text (images) cannot support factual findings. PDF page markers and document text are retained where extractable. There is no OCR. Production refuses uploads until `UPLOAD_SCAN_COMMAND` is configured. On Replit, provision a compatible scanner and its definitions/service, or implement and test a supported scanning adapter; do not disable the check. Images can be inspected with context and permissions; automated visual analysis is not implemented.
+PDF, DOCX, TXT, Markdown (.md), PNG and JPEG up to 10 MB are supported. A quotation is matched against the source's captured text, ignoring line breaks, spacing and typographic quotation marks; one that is not found word for word is kept and flagged for a check rather than refused (plan P1.2, 28 Oct 2026). Sources without captured text (images) cannot support factual findings. PDF page markers and document text are retained where extractable. There is no OCR. Production refuses uploads until `UPLOAD_SCAN_COMMAND` is configured. On Replit, provision a compatible scanner and its definitions/service, or implement and test a supported scanning adapter; do not disable the check. Images can be inspected with context and permissions; automated visual analysis is not implemented.
 
 ## Research behaviour
 
@@ -89,6 +89,8 @@ Reviewers and administrators can delete a role ("Delete role" on the role card).
 Captured web pages can be refreshed. The earlier capture is never modified (existing quotations keep referring to it); a new capture is recorded with `supersedes`/`supersededBy` links and a stored sentence-level summary of what was added and removed (`captureDiff`). Findings citing any earlier capture of the page whose exact quotation newly disappears are flagged "Source changed — re-review" and block readiness until they are reviewed again; their version is bumped so a review opened before the refresh cannot be saved over the change. A refresh that finds no text change leaves a ready role profile ready.
 
 ## Export contract
+
+A pack downloads as a ZIP holding `knowledge-base.json` (the file Springpod Studio imports) and `knowledge-base.md`, or as either file alone. The Word document, the six-folder archive of source files and the separate confirmation page were retired on 28 Oct 2026 (plan P1.7). Every export is checked against a copy of Studio's parser (`tests/studio-contract.ts`).
 
 Pack revision and schema version are separate. `schemaVersion: 1.0.0` is described by [research-pack.schema.json](docs/research-pack.schema.json); TypeScript shapes are in `shared/types.ts`. IDs are stable UUIDs. JSON and Markdown derive from the exact same saved snapshot. Markdown includes complete JSON metadata to preserve parity. Uploaded binary files are not embedded in packs; sources retain metadata and captured text. Keep the original assets available separately.
 

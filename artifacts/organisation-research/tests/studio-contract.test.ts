@@ -110,6 +110,15 @@ describe("Studio import contract", () => {
     expect(markdown.text).toContain("Manchester centre");
   });
 
+  it("offers only the ZIP, JSON and Markdown downloads (plan P1.7)", async () => {
+    const pack = await request(app())
+      .post(`/api/roles/${fixture.roles[0].id}/packs`)
+      .send({});
+    for (const retired of ["docx", "confirm.md"])
+      expect((await request(app()).get(`/api/packs/${pack.body.id}/${retired}`)).status).toBe(422);
+    expect((await request(app()).get(`/api/packs/${pack.body.id}/md`)).status).toBe(200);
+  });
+
   it("is a real check: Studio refuses a null where it expects text", async () => {
     const pack = await request(app())
       .post(`/api/roles/${fixture.roles[0].id}/packs`)

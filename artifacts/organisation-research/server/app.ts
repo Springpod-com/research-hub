@@ -86,12 +86,7 @@ import {
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import {
-  confirmationMarkdown,
-  packDocx,
-  packFolderZipStream,
-  packZipName,
-} from "./export.js";
+import { packZip, packZipName } from "./export.js";
 export interface AppOptions {
   testMember?: Member;
   preview?: boolean;
@@ -1922,22 +1917,6 @@ export function createApp(store: Store, options: AppOptions = {}) {
     }),
   );
   app.get(
-    "/api/packs/:id/docx",
-    handler(async (req, res) => {
-      const pack = get(await store.packs(), String(req.params.id));
-      res.setHeader("Cache-Control", "private, no-store");
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename="${packZipName(pack).replace(/\.zip$/, ".docx")}"`,
-      );
-      res
-        .type(
-          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        )
-        .send(await packDocx(pack));
-    }),
-  );
-  app.get(
     "/api/packs/:id/zip",
     handler(async (req, res) => {
       const pack = get(await store.packs(), String(req.params.id));
@@ -1946,30 +1925,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
         "Content-Disposition",
         `attachment; filename="${packZipName(pack)}"`,
       );
-      res.type("application/zip");
-      const stream = await packFolderZipStream(pack, store);
-      stream.on("error", () => {
-        if (!res.headersSent) res.status(500);
-        res.end();
-      });
-      stream.pipe(res);
-    }),
-  );
-  app.get(
-    "/api/packs/:id/confirm.md",
-    handler(async (req, res) => {
-      const pack = get(await store.packs(), String(req.params.id));
-      if (pack.schemaVersion !== "2.0.0")
-        throw new HttpError(
-          404,
-          "The confirmation page is not available for schema 1.0.0 packs.",
-        );
-      res.setHeader("Cache-Control", "private, no-store");
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename="for-organisation-to-confirm-r${pack.revision}.md"`,
-      );
-      res.type("text/markdown").send(confirmationMarkdown(pack));
+      res.type("application/zip").send(await packZip(pack));
     }),
   );
   app.get(

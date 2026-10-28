@@ -1,5 +1,0 @@
-Media
-
-Films and stills. Every film is transcribed to a text file beside it (the model reads text, not video); stills lifted from the organisation's own films carry the film's name and the timecode. Every item has a rights note in the media log: supplied by the organisation, press kit, or reference only. Tier 2 for the organisation's own material.
-
-Name every file with its date and where it came from, for example 2026-09-17_careers-page_apprenticeships.pdf, and log it in Springpod_LEARN_Organisation_Knowledge_Base_V1.docx.

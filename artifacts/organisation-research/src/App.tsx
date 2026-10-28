@@ -2914,6 +2914,22 @@ export function App({
                 </div>
                 <div className="flex flex-wrap gap-2 items-center">
                   <U.Button
+                    size="sm"
+                    onClick={() =>
+                      void run(
+                        () =>
+                          download(
+                            `/packs/${p.id}/zip`,
+                            `${org!.name}-research-r${p.revision}.zip`,
+                          ),
+                        "Pack downloaded",
+                      )
+                    }
+                  >
+                    <U.IconDownload size={16} />
+                    Download for Studio (ZIP)
+                  </U.Button>
+                  <U.Button
                     variant="outline"
                     size="sm"
                     onClick={() =>
@@ -2946,59 +2962,6 @@ export function App({
                   >
                     JSON
                   </U.Button>
-                  <U.Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() =>
-                      void run(
-                        () =>
-                          download(
-                            `/packs/${p.id}/docx`,
-                            `${org!.name}-research-r${p.revision}.docx`,
-                          ),
-                        "DOCX downloaded",
-                      )
-                    }
-                  >
-                    <U.IconDownload size={16} />
-                    Download DOCX
-                  </U.Button>
-                  <U.Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() =>
-                      void run(
-                        () =>
-                          download(
-                            `/packs/${p.id}/zip`,
-                            `${org!.name}-research-r${p.revision}.zip`,
-                          ),
-                        "Folder downloaded",
-                      )
-                    }
-                  >
-                    <U.IconDownload size={16} />
-                    Download folder (ZIP)
-                  </U.Button>
-                  {p.schemaVersion === "2.0.0" && (
-                    <U.Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() =>
-                        void run(
-                          () =>
-                            download(
-                              `/packs/${p.id}/confirm.md`,
-                              `${org!.name}-research-r${p.revision}-to-confirm.md`,
-                            ),
-                          "Confirmation list downloaded",
-                        )
-                      }
-                    >
-                      <U.IconDownload size={16} />
-                      For the organisation to confirm
-                    </U.Button>
-                  )}
                 </div>
               </div>
               <details className="mt-4">
