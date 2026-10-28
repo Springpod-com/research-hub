@@ -13,6 +13,7 @@ import type {
   Finding,
   Question,
   Activity,
+  Attributed,
   Pack,
   Session,
   ResearchJob,
@@ -44,7 +45,6 @@ import {
 import { ResearchWorkspacePage } from "./components/research-workspace-page";
 import * as U from "./ui";
 import { OrgSuggestions } from "./components/org-suggestions";
-import { ResearchSettings } from "./components/research-settings";
 import {
   OccupationMatcher,
   type OccupationRecord,
@@ -79,7 +79,7 @@ import { uploadFiles } from "./uploadBatch";
 import {
   ActiveRunBanner,
   RunCard,
-  TIER_NAME,
+  runLabel,
   isActive,
   scopeTitle,
 } from "./components/research-runs";
@@ -91,7 +91,7 @@ const POLL_IDLE = 12000;
 // Shown wherever a readiness check appears, so the term is explained the
 // same way everywhere.
 const READINESS_HELP =
-  "Readiness means the role's research passes the handover checks: responsibilities are described, evidence is accepted and valid, reviews and blocking questions are complete, changed sources are rechecked, and research runs have finished. It is a research milestone, not the organisation's approval.";
+  "Readiness means the role's research passes the handover checks: responsibilities are described, evidence is accepted and valid, reviews and blocking questions are complete, and research runs have finished. It is a research milestone, not the organisation's approval.";
 const labels: Record<string, string> = {
   ...sharedLabels,
 };
@@ -195,12 +195,6 @@ function normaliseWebAddress(value: string) {
   } catch {
     return;
   }
-}
-/** A cited web page was refreshed and the quotation is gone; unreviewed since. */
-function sourceChanged(f: Finding) {
-  return (f.sourceChanges || []).some(
-    (c) => !c.quoteFound && (!f.reviewedAt || f.reviewedAt < c.at),
-  );
 }
 function Status({ value }: { value: string }) {
   return (
@@ -468,7 +462,7 @@ export function App({
 }) {
   const [data, setData] = useState<Data>();
   const [session, setSession] = useState<
-    Session & { providers: Record<string, boolean> }
+    Session & { research?: { ready: boolean; model: string | null } }
   >();
   const [error, setError] = useState("");
   const [route, setRoute] = useState(currentRoute);
@@ -786,8 +780,10 @@ export function App({
             )
           ? "ready"
           : "draft";
-  // Creating an organisation asks only for its identity; division, summary
-  // and brand notes are added later through "Edit organisation".
+  // Creating an organisation asks only for its identity; the summary and the
+  // may-use and must-not-say lists are added through "Edit organisation".
+  // Entity, fact checker and brand fields were retired on 28 Oct 2026 (plan
+  // P1.6): their stored values are kept and sent back unchanged.
   const orgFields = (o?: Organisation): Field[] => [
     {
       name: "name",
@@ -811,11 +807,6 @@ export function App({
     ...(o
       ? ([
           {
-            name: "division",
-            label: "The entity the learner meets",
-            value: o.division,
-          },
-          {
             name: "summary",
             label: "Organisation summary",
             value: o.summary,
@@ -823,90 +814,19 @@ export function App({
             hint: "A working summary. Evidence-backed claims about the organisation are recorded separately.",
           },
           {
-            name: "brandNotes",
-            label: "Brand",
-            value: o.brandNotes,
+            name: "mayUse",
+            label: "Names we may use",
+            value: (o.mayUse || []).map((item) => item.text).join("\n"),
             kind: "textarea",
+            hint: "One per line.",
           },
           {
-            name: "factCheckerStatus",
-            label: "Who at the organisation checks facts",
-            value:
-              o.factChecker &&
-              o.factChecker.name.trim().toLowerCase() !== "not yet known"
-                ? "named"
-                : "unknown",
-            kind: "select",
-            options: [
-              ["unknown", "Not yet known"],
-              ["named", "Named contact"],
-            ],
-          },
-          {
-            name: "factCheckerName",
-            label: "Fact checker — name",
-            value: o.factChecker?.name,
-            hint: "Leave both fields blank if this is not yet known.",
-          },
-          {
-            name: "factCheckerJobTitle",
-            label: "Who at the organisation checks facts — job title",
-            value: o.factChecker?.jobTitle,
-          },
-          {
-            name: "brandGuidelines",
-            label: "Brand guidelines and where they live",
-            value: o.brand?.guidelines,
+            name: "mustNotSay",
+            label: "Things we must not say",
+            value: (o.mustNotSay || []).map((item) => item.text).join("\n"),
             kind: "textarea",
+            hint: "One per line.",
           },
-          {
-            name: "brandLogo",
-            label: "Logo rules",
-            value: o.brand?.logo,
-            kind: "textarea",
-          },
-          {
-            name: "brandPhotography",
-            label: "Photography",
-            value: o.brand?.photography,
-            kind: "textarea",
-          },
-          {
-            name: "brandHouseStyle",
-            label: "House style",
-            value: o.brand?.houseStyle,
-            kind: "textarea",
-          },
-          ...(["mayUse", "mustNotSay"] as const).flatMap((key) => {
-            const items = [...(o[key] || []), { text: "", sourceId: "none" }];
-            const heading =
-              key === "mayUse" ? "Names we may use" : "Things we must not say";
-            return items.flatMap((item, index): Field[] => [
-              {
-                name: `${key}Text${index}`,
-                label: index === 0 ? heading : `${heading} — item ${index + 1}`,
-                value: item.text,
-                hint:
-                  index === items.length - 1
-                    ? "Use the final empty row to add another item."
-                    : undefined,
-              },
-              {
-                name: `${key}Source${index}`,
-                label: `Tier-1 source for item ${index + 1}`,
-                value: item.sourceId || "none",
-                kind: "select",
-                options: [
-                  ["none", "Not selected"],
-                  ...organisationSources
-                    .filter((source) => source.tier === 1)
-                    .map(
-                      (source) => [source.id, source.title] as [string, string],
-                    ),
-                ],
-              },
-            ]);
-          }),
         ] satisfies Field[])
       : []),
   ];
@@ -933,114 +853,6 @@ export function App({
             value: r.boundaries,
             kind: "textarea",
             hint: "What can this person decide, and when must they ask for help?",
-          },
-          {
-            name: "standardName",
-            label: "Apprenticeship standard — name",
-            value: r.standard?.name,
-          },
-          {
-            name: "standardLevel",
-            label: "Apprenticeship standard — level",
-            value: r.standard?.level,
-          },
-          {
-            name: "standardDuration",
-            label: "Apprenticeship standard — duration",
-            value: r.standard?.duration,
-          },
-          {
-            name: "standardUrl",
-            label: "Apprenticeship standard — URL",
-            value: r.standard?.url,
-            validateUrl: true,
-          },
-          {
-            name: "assessmentPlanUrl",
-            label: "Assessment plan URL",
-            value: r.standard?.assessmentPlanUrl,
-            validateUrl: true,
-          },
-          {
-            name: "ncsUrl",
-            label: "National Careers Service profile URL",
-            value: r.ncsUrl,
-            validateUrl: true,
-          },
-          {
-            name: "bodyName",
-            label: "Professional body — name",
-            value: r.professionalBody?.name,
-          },
-          {
-            name: "registrationRoute",
-            label: "Professional body — registration route",
-            value: r.professionalBody?.registrationRoute,
-          },
-          {
-            name: "frameworkUrl",
-            label: "Professional body — framework URL",
-            value: r.professionalBody?.frameworkUrl,
-            validateUrl: true,
-          },
-          {
-            name: "interviewWho",
-            label: "Interview — who",
-            value: r.interview?.who,
-          },
-          {
-            name: "interviewJobTitle",
-            label: "Interview — job title",
-            value: r.interview?.jobTitle,
-          },
-          {
-            name: "timeInRole",
-            label: "Interview — time in role",
-            value: r.interview?.timeInRole,
-          },
-          {
-            name: "mayBeNamed",
-            label: "Interview — may be named",
-            value: r.interview?.mayBeNamed ? "true" : "false",
-            kind: "select",
-            options: [
-              ["false", "No"],
-              ["true", "Yes"],
-            ],
-          },
-          {
-            name: "interviewDate",
-            label: "Interview — date",
-            value: r.interview?.date,
-          },
-          {
-            name: "interviewHow",
-            label: "Interview — how it took place",
-            value: r.interview?.how,
-          },
-          {
-            name: "recordingSourceId",
-            label: "Interview — recording source",
-            value: r.interview?.recordingSourceId || "none",
-            kind: "select",
-            options: [
-              ["none", "Not selected"],
-              ...organisationSources.map(
-                (source) => [source.id, source.title] as [string, string],
-              ),
-            ],
-          },
-          {
-            name: "transcriptSourceId",
-            label: "Interview — transcript source",
-            value: r.interview?.transcriptSourceId || "none",
-            kind: "select",
-            options: [
-              ["none", "Not selected"],
-              ...organisationSources.map(
-                (source) => [source.id, source.title] as [string, string],
-              ),
-            ],
           },
         ] satisfies Field[])
       : []),
@@ -1086,54 +898,28 @@ export function App({
                 )
           }
           onSubmit={async (v) => {
-            const {
-              factCheckerStatus,
-              factCheckerName,
-              factCheckerJobTitle,
-              brandGuidelines,
-              brandLogo,
-              brandPhotography,
-              brandHouseStyle,
-              ...base
-            } = v;
-            const attributed = (key: "mayUse" | "mustNotSay") =>
-              Object.keys(v)
-                .filter((name) => name.startsWith(`${key}Text`))
-                .sort(
-                  (a, b) =>
-                    Number(a.slice(`${key}Text`.length)) -
-                    Number(b.slice(`${key}Text`.length)),
-                )
-                .map((name) => {
-                  const index = name.slice(`${key}Text`.length);
-                  return {
-                    text: v[name].trim(),
-                    sourceId: v[`${key}Source${index}`],
-                  };
-                })
-                .filter((item) => item.text);
-            const cleanBase = Object.fromEntries(
-              Object.entries(base).filter(
-                ([name]) => !/^(mayUse|mustNotSay)(Text|Source)\d+$/.test(name),
-              ),
-            );
+            // Keep a line's earlier source when its text is unchanged.
+            const lines = (value: string | undefined, earlier: Attributed[] = []) =>
+              (value || "")
+                .split("\n")
+                .map((line) => line.trim())
+                .filter(Boolean)
+                .map(
+                  (text) =>
+                    earlier.find((item) => item.text === text) || { text },
+                );
             const organisationValues = m
               ? {
-                  ...cleanBase,
-                  factChecker:
-                    factCheckerStatus === "named"
-                      ? { name: factCheckerName, jobTitle: factCheckerJobTitle }
-                      : { name: "not yet known", jobTitle: "" },
-                  brand: {
-                    guidelines: brandGuidelines,
-                    logo: brandLogo,
-                    photography: brandPhotography,
-                    houseStyle: brandHouseStyle,
-                  },
-                  mayUse: attributed("mayUse"),
-                  mustNotSay: attributed("mustNotSay"),
+                  name: v.name,
+                  website: v.website,
+                  country: v.country,
+                  summary: v.summary,
+                  division: m.division,
+                  brandNotes: m.brandNotes,
+                  mayUse: lines(v.mayUse, m.mayUse),
+                  mustNotSay: lines(v.mustNotSay, m.mustNotSay),
                 }
-              : base;
+              : v;
             const created = m
               ? await patch(`/organisations/${m.id}`, {
                   ...organisationValues,
@@ -1156,60 +942,10 @@ export function App({
           fields={roleFields(m)}
           onClose={close}
           onSubmit={async (v) => {
-            const {
-              standardName,
-              standardLevel,
-              standardDuration,
-              standardUrl,
-              assessmentPlanUrl,
-              bodyName,
-              registrationRoute,
-              frameworkUrl,
-              interviewWho,
-              interviewJobTitle,
-              timeInRole,
-              mayBeNamed,
-              interviewDate,
-              interviewHow,
-              recordingSourceId,
-              transcriptSourceId,
-              ...base
-            } = v;
-            const roleValues = m
-              ? {
-                  ...base,
-                  standard: standardName.trim()
-                    ? {
-                        name: standardName,
-                        level: standardLevel,
-                        duration: standardDuration,
-                        url: standardUrl,
-                        assessmentPlanUrl,
-                      }
-                    : null,
-                  professionalBody: bodyName.trim()
-                    ? { name: bodyName, registrationRoute, frameworkUrl }
-                    : null,
-                  interview: interviewWho.trim()
-                    ? {
-                        who: interviewWho,
-                        jobTitle: interviewJobTitle,
-                        timeInRole,
-                        mayBeNamed: mayBeNamed === "true",
-                        date: interviewDate,
-                        how: interviewHow,
-                        recordingSourceId:
-                          recordingSourceId === "none"
-                            ? undefined
-                            : recordingSourceId,
-                        transcriptSourceId:
-                          transcriptSourceId === "none"
-                            ? undefined
-                            : transcriptSourceId,
-                      }
-                    : null,
-                }
-              : base;
+            // Apprenticeship standard, careers profile, professional body and
+            // interview were retired from the form on 28 Oct 2026 (plan P1.6);
+            // leaving them out of the save keeps any stored values.
+            const roleValues = v;
             return save(
               () =>
                 m
@@ -1318,22 +1054,6 @@ export function App({
           fields={[
             { name: "title", label: "Source title", required: true },
             {
-              name: "kind",
-              label: "Source type",
-              value: "statement",
-              kind: "select",
-              options: [
-                ["statement", "Statement from the organisation or team"],
-                ["document", "Document excerpt"],
-                ["occupation", "Occupational reference"],
-                ["film", "Film"],
-                ["advert", "Job advert"],
-                ["screenshot", "Screenshot"],
-                ["standard", "Apprenticeship standard"],
-                ["guidance", "Professional guidance"],
-              ],
-            },
-            {
               name: "text",
               label: "Source passage",
               required: true,
@@ -1341,39 +1061,13 @@ export function App({
             },
             { name: "url", label: "Source URL (optional)" },
             {
-              name: "suppliedBy",
-              label: "Source or contributor name",
-              required: true,
-            },
-            {
-              name: "verification",
-              label: "Verification basis",
-              value: "user-supplied",
+              name: "fromOrganisation",
+              label: "Did this come from the organisation?",
+              value: "no",
               kind: "select",
               options: [
-                ["user-supplied", "Team-supplied information"],
-                ["client-confirmed", "Confirmed by the organisation"],
-                ["public-source", "Public source"],
-              ],
-            },
-            {
-              name: "providedByName",
-              label: "Organisation contact name (if confirmed)",
-            },
-            {
-              name: "providedByJobTitle",
-              label: "Organisation contact job title (if confirmed)",
-            },
-            {
-              name: "rights",
-              label: "Media rights",
-              value: "none",
-              kind: "select",
-              options: [
-                ["none", "Not applicable or not recorded"],
-                ["organisation-supplied", "Supplied by the organisation"],
-                ["press-kit", "Press kit"],
-                ["reference-only", "Reference only"],
+                ["no", "No"],
+                ["yes", "Yes, the organisation supplied or confirmed it"],
               ],
             },
             {
@@ -1383,7 +1077,6 @@ export function App({
               kind: "select",
               options: FOLDER_OPTIONS,
             },
-            { name: "locator", label: "Page, section or meeting reference" },
             scopeField,
           ]}
           onClose={close}
@@ -1392,23 +1085,16 @@ export function App({
               () =>
                 post(`/organisations/${org!.id}/sources`, {
                   title: v.title,
-                  kind: v.kind,
+                  kind: "statement",
                   text: v.text,
                   url: v.url,
-                  suppliedBy: v.suppliedBy,
-                  verification: v.verification,
-                  locator: v.locator,
+                  suppliedBy: session?.name || "Springpod team",
+                  verification:
+                    v.fromOrganisation === "yes"
+                      ? "client-confirmed"
+                      : "user-supplied",
                   roleIds: v.roleId === "all" ? [] : [v.roleId],
                   folder: v.folder === "auto" ? undefined : v.folder,
-                  rights: v.rights === "none" ? undefined : v.rights,
-                  providedBy:
-                    v.verification === "client-confirmed" &&
-                    v.providedByName.trim()
-                      ? {
-                          name: v.providedByName,
-                          jobTitle: v.providedByJobTitle,
-                        }
-                      : undefined,
                 }),
               "Source recorded",
             )
@@ -1467,39 +1153,18 @@ export function App({
             },
             {
               name: "caption",
-              label: "Context or image caption",
+              label: "Notes (optional)",
               kind: "textarea",
-              hint: "For photos, describe the location, relevant role and anything the image cannot establish.",
+              hint: "Anything a reader should know about this material.",
             },
             {
-              name: "verification",
-              label: "Verification basis",
-              value: "user-supplied",
+              name: "fromOrganisation",
+              label: "Did this come from the organisation?",
+              value: "no",
               kind: "select",
               options: [
-                ["user-supplied", "Team-supplied information"],
-                ["client-confirmed", "Confirmed by the organisation"],
-                ["public-source", "Public source"],
-              ],
-            },
-            {
-              name: "providedByName",
-              label: "Organisation contact name (if confirmed)",
-            },
-            {
-              name: "providedByJobTitle",
-              label: "Organisation contact job title (if confirmed)",
-            },
-            {
-              name: "rights",
-              label: "Image or film rights",
-              value: "none",
-              kind: "select",
-              options: [
-                ["none", "Not recorded"],
-                ["organisation-supplied", "Supplied by the organisation"],
-                ["press-kit", "Press kit"],
-                ["reference-only", "Reference only"],
+                ["no", "No"],
+                ["yes", "Yes, the organisation supplied or confirmed it"],
               ],
             },
             {
@@ -1547,21 +1212,8 @@ export function App({
                 form.append("title", meta.title);
                 form.append("caption", meta.caption);
                 if (meta.folder !== "auto") form.append("folder", meta.folder);
-                if (meta.rights !== "none") form.append("rights", meta.rights);
-                if (meta.tier) form.append("tier", meta.tier);
-                if (meta.tierReason) form.append("tierReason", meta.tierReason);
-                if (
-                  meta.verification === "client-confirmed" &&
-                  meta.providedByName.trim()
-                ) {
-                  form.append(
-                    "providedBy",
-                    JSON.stringify({
-                      name: meta.providedByName,
-                      jobTitle: meta.providedByJobTitle,
-                    }),
-                  );
-                }
+                if (meta.fromOrganisation === "yes")
+                  form.append("fromOrganisation", "true");
                 if (meta.roleId !== "all") form.append("roleId", meta.roleId);
                 const response = await api<Source | ZipResult>(
                   `/organisations/${org!.id}/upload`,
@@ -1644,7 +1296,9 @@ export function App({
                   url: "",
                   locator: value.extractedFrom,
                   suppliedBy: session?.name || "",
-                  verification: "public-source",
+                  verification: value.fromOrganisation
+                    ? "client-confirmed"
+                    : "user-supplied",
                   roleIds: noteRoleIds(value.folder, value.roleId),
                 }),
               "Research note saved",
@@ -1934,13 +1588,13 @@ export function App({
           sources={(data?.sources || []).filter(
             (x) => x.orgId === org!.id && x.text && !x.error,
           )}
-          tiers={session?.providers || {}}
+          ready={!!session?.research?.ready}
           initialRoleId={roleId === "all" ? undefined : roleId}
           initialSection={modal.item?.section}
           initialSourceIds={modal.item?.sourceIds}
           onClose={close}
-          onStart={async (tier, scopeRoleId, sections, sourceIds, crawl) => {
-            await startResearch(tier, scopeRoleId, sections, sourceIds, crawl);
+          onStart={async (scopeRoleId, sections, sourceIds, crawl) => {
+            await startResearch(scopeRoleId, sections, sourceIds, crawl);
           }}
         />
       );
@@ -2146,14 +1800,12 @@ export function App({
     </U.Button>
   );
   const startResearch = async (
-    tier: string,
     scopeRoleId?: string,
     sections?: Section[],
     sourceIds?: string[],
     crawl?: boolean,
   ) => {
     const job: ResearchJob = await post(`/organisations/${org!.id}/research`, {
-      tier,
       roleId: scopeRoleId,
       sections,
       sourceIds,
@@ -2209,7 +1861,7 @@ export function App({
     const lastRun = [...orgJobs].sort((x, y) =>
       y.updatedAt.localeCompare(x.updatedAt),
     )[0];
-    const runLabel: Record<string, string> = {
+    const runStatusLabel: Record<string, string> = {
       queued: "queued",
       researching: "in progress",
       completed: "completed",
@@ -2340,7 +1992,7 @@ export function App({
                 {detail(
                   "Last research run",
                   lastRun
-                    ? `${date(lastRun.updatedAt)} · ${runLabel[lastRun.status] || lastRun.status}`
+                    ? `${date(lastRun.updatedAt)} · ${runStatusLabel[lastRun.status] || lastRun.status}`
                     : "Not run yet",
                   !lastRun,
                 )}
@@ -2475,7 +2127,7 @@ export function App({
                       <summary className="cursor-pointer flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border px-4 py-3 group-open:mb-2">
                         <span className="text-p4">
                           {scopeTitle(j, orgRoles)} · {date(j.createdAt)} ·{" "}
-                          {TIER_NAME[j.tier]}
+                          {runLabel(j)}
                         </span>
                         <span className="flex items-center gap-3">
                           <Status value={j.status} />
@@ -2782,7 +2434,7 @@ export function App({
                     (researchRun) =>
                       [
                         researchRun.id,
-                        `${date(researchRun.createdAt)} · ${TIER_NAME[researchRun.tier]}`,
+                        `${date(researchRun.createdAt)} · ${runLabel(researchRun)}`,
                       ] as [string, string],
                   ),
                 ]}
@@ -2835,9 +2487,9 @@ export function App({
                         <U.Badge variant="outline">{slotLabel(f.slot)}</U.Badge>
                       )}
                       <Status value={f.review} />
-                      {sourceChanged(f) && (
-                        <U.Badge variant="destructive">
-                          Source changed — re-review
+                      {f.citations.some((c) => c.unmatched) && (
+                        <U.Badge variant="warning">
+                          Check the source: quote not found word for word
                         </U.Badge>
                       )}
                       {f.runIds.length > 1 && (
@@ -3262,6 +2914,22 @@ export function App({
                 </div>
                 <div className="flex flex-wrap gap-2 items-center">
                   <U.Button
+                    size="sm"
+                    onClick={() =>
+                      void run(
+                        () =>
+                          download(
+                            `/packs/${p.id}/zip`,
+                            `${org!.name}-research-r${p.revision}.zip`,
+                          ),
+                        "Pack downloaded",
+                      )
+                    }
+                  >
+                    <U.IconDownload size={16} />
+                    Download for Studio (ZIP)
+                  </U.Button>
+                  <U.Button
                     variant="outline"
                     size="sm"
                     onClick={() =>
@@ -3294,59 +2962,6 @@ export function App({
                   >
                     JSON
                   </U.Button>
-                  <U.Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() =>
-                      void run(
-                        () =>
-                          download(
-                            `/packs/${p.id}/docx`,
-                            `${org!.name}-research-r${p.revision}.docx`,
-                          ),
-                        "DOCX downloaded",
-                      )
-                    }
-                  >
-                    <U.IconDownload size={16} />
-                    Download DOCX
-                  </U.Button>
-                  <U.Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() =>
-                      void run(
-                        () =>
-                          download(
-                            `/packs/${p.id}/zip`,
-                            `${org!.name}-research-r${p.revision}.zip`,
-                          ),
-                        "Folder downloaded",
-                      )
-                    }
-                  >
-                    <U.IconDownload size={16} />
-                    Download folder (ZIP)
-                  </U.Button>
-                  {p.schemaVersion === "2.0.0" && (
-                    <U.Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() =>
-                        void run(
-                          () =>
-                            download(
-                              `/packs/${p.id}/confirm.md`,
-                              `${org!.name}-research-r${p.revision}-to-confirm.md`,
-                            ),
-                          "Confirmation list downloaded",
-                        )
-                      }
-                    >
-                      <U.IconDownload size={16} />
-                      For the organisation to confirm
-                    </U.Button>
-                  )}
                 </div>
               </div>
               <details className="mt-4">
@@ -3401,7 +3016,7 @@ export function App({
       {pageHeading(
         "Workspace",
         "Team & settings",
-        "Team access, research connections and research instructions. Access is managed independently from the wider platform.",
+        "Team access and the research model. Access is managed independently from the wider platform.",
       )}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <U.Card>
@@ -3474,11 +3089,23 @@ export function App({
             )}
           </U.CardContent>
         </U.Card>
-        <ResearchSettings
-          key={session?.userId}
-          session={session || null}
-          members={data?.members || []}
-        />
+        <U.Card>
+          <U.CardHeader>
+            <U.CardTitle>Research model</U.CardTitle>
+            <U.CardDescription>
+              Every research run makes one analysis with this model. It is set
+              on the server (RESEARCH_MODEL), not here.
+            </U.CardDescription>
+          </U.CardHeader>
+          <U.CardContent>
+            <p className="text-p3">
+              {session?.research?.model || "Not set"}
+              {session?.research?.model && !session.research.ready
+                ? " · its provider is not connected"
+                : ""}
+            </p>
+          </U.CardContent>
+        </U.Card>
       </div>
     </>
   );
@@ -3816,7 +3443,7 @@ export function App({
               <U.AlertDialogTitle>Cancel this research run?</U.AlertDialogTitle>
               <U.AlertDialogDescription>
                 {scopeTitle(cancelling, orgRoles)} ·{" "}
-                {TIER_NAME[cancelling.tier]}. Evidence already extracted is
+                {runLabel(cancelling)}. Evidence already extracted is
                 kept, but the run cannot be resumed; you can start a new one
                 later.
               </U.AlertDialogDescription>
@@ -3873,17 +3500,6 @@ export function App({
       {source && (
         <SourcePanel
           source={data?.sources.find((s) => s.id === source.id) || source}
-          onRefresh={async () => {
-            const result: RefreshResult = await post(
-              `/sources/${source.id}/refresh`,
-              {},
-            );
-            await reload();
-            // Superseding bumps this capture's version; the panel's own refresh
-            // is not a conflict, so carry the new version for a later save.
-            setSource({ ...source, version: source.version + 1 });
-            return result;
-          }}
           onClose={() => setSource(undefined)}
           onSave={async (v) => {
             await patch(`/sources/${source.id}`, {
@@ -3972,16 +3588,6 @@ function EvidencePanel({
           </U.SheetDescription>
         </U.SheetHeader>
         <div className="space-y-6 py-6">
-          {sourceChanged(f) && (
-            <U.Alert>
-              <U.AlertTitle>The cited page changed</U.AlertTitle>
-              <U.AlertDescription>
-                A newer capture no longer contains this exact quotation. Check
-                the passage against the new capture before saving a review; the
-                fact is marked for attention until it is checked again.
-              </U.AlertDescription>
-            </U.Alert>
-          )}
           {tableSlot ? (
             <FactFields
               slot={slot}
@@ -4063,6 +3669,11 @@ function EvidencePanel({
                     <blockquote className="border-l-2 border-brand-teal pl-4 text-p3 whitespace-pre-wrap">
                       “{c.quote}”
                     </blockquote>
+                    {c.unmatched && (
+                      <U.Badge variant="warning">
+                        Not found word for word in this source. Check the source says this.
+                      </U.Badge>
+                    )}
                     {s?.url && (
                       <a
                         href={s.url}
@@ -4244,24 +3855,14 @@ function EvidencePanel({
     </U.Sheet>
   );
 }
-interface RefreshResult {
-  source: Source;
-  previousId: string;
-  changed: boolean;
-  added: string[];
-  removed: string[];
-  affectedFindingIds: string[];
-}
 function SourcePanel({
   source: s,
   onClose,
   onSave,
-  onRefresh,
 }: {
   source: Source;
   onClose: () => void;
   onSave: (v: any) => Promise<void>;
-  onRefresh: () => Promise<RefreshResult>;
 }) {
   const [permission, setPermission] = useState(s.permission);
   const [caption, setCaption] = useState(s.caption || "");
@@ -4272,7 +3873,6 @@ function SourcePanel({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [image, setImage] = useState("");
-  const [refresh, setRefresh] = useState<RefreshResult>();
   const folderChanged = folderTouched && folder !== (s.folder || "auto");
   const rightsChanged = rightsTouched && rights !== (s.rights || "none");
   const dirty =
@@ -4281,8 +3881,6 @@ function SourcePanel({
     folderChanged ||
     rightsChanged;
   const closeGuard = useFormCloseGuard({ dirty, busy, onClose });
-  const diff =
-    refresh || (s.captureDiff ? { ...s.captureDiff, source: s } : undefined);
   useEffect(() => {
     if (s.kind !== "image") return;
     let url = "";
@@ -4373,83 +3971,9 @@ function SourcePanel({
             )}
           </div>
           {s.kind === "web" && s.url && (
-            <div className="space-y-3">
-              <div className="flex flex-wrap items-center gap-2">
-                {s.supersededBy ? (
-                  <U.Badge variant="outline">
-                    Superseded by a newer capture
-                  </U.Badge>
-                ) : (
-                  <U.Button
-                    variant="outline"
-                    size="sm"
-                    disabled={busy}
-                    onClick={() => {
-                      setBusy(true);
-                      setError("");
-                      onRefresh()
-                        .then(setRefresh)
-                        .catch((e) => setError(e.message))
-                        .finally(() => setBusy(false));
-                    }}
-                  >
-                    {busy ? "Refreshing…" : "Refresh capture"}
-                  </U.Button>
-                )}
-                {s.supersedes && (
-                  <U.Badge variant="outline">
-                    Refreshed from an earlier capture
-                  </U.Badge>
-                )}
-                <span className="text-p5 text-muted-foreground">
-                  Captured {new Date(s.retrievedAt).toLocaleString()}
-                </span>
-              </div>
-              {diff && (
-                <U.Alert>
-                  <U.AlertDescription>
-                    <p className="text-p4 font-medium">
-                      {diff.changed
-                        ? `${refresh ? "The page changed." : "This capture differs from the one it refreshed."} ${diff.affectedFindingIds.length} fact${diff.affectedFindingIds.length === 1 ? "" : "s"} cite${diff.affectedFindingIds.length === 1 ? "s" : ""} passages that no longer appear and ${diff.affectedFindingIds.length === 1 ? "was" : "were"} flagged for re-review.`
-                        : refresh
-                          ? "No text change since the previous capture. A new capture was recorded with today’s date."
-                          : "No text change against the capture this one refreshed."}
-                    </p>
-                    {refresh && (
-                      <p className="text-p5 mt-1">
-                        This capture is kept unchanged; existing quotations
-                        still refer to it. New facts should cite the new
-                        capture.
-                      </p>
-                    )}
-                    {diff.removed.length > 0 && (
-                      <div className="mt-3">
-                        <p className="text-label-3">
-                          Removed ({diff.removed.length})
-                        </p>
-                        {diff.removed.slice(0, 8).map((t, i) => (
-                          <p key={i} className="text-p5 line-through">
-                            {t}
-                          </p>
-                        ))}
-                      </div>
-                    )}
-                    {diff.added.length > 0 && (
-                      <div className="mt-3">
-                        <p className="text-label-3">
-                          Added ({diff.added.length})
-                        </p>
-                        {diff.added.slice(0, 8).map((t, i) => (
-                          <p key={i} className="text-p5">
-                            {t}
-                          </p>
-                        ))}
-                      </div>
-                    )}
-                  </U.AlertDescription>
-                </U.Alert>
-              )}
-            </div>
+            <p className="text-p5 text-muted-foreground">
+              Captured {new Date(s.retrievedAt).toLocaleString()}
+            </p>
           )}
           {s.error && (
             <U.Alert>

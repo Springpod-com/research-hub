@@ -37,6 +37,13 @@ export const sections: {
   { section: "supplied", folder: "06-organisation-supplied", title: "Supplied by the organisation", roleScoped: false },
 ];
 /** The named places of the document a fact can fill; "none" keeps it in the register only. */
+/**
+ * Brand and media are set in Springpod Studio (the employer's brand settings
+ * and the media library), so they are no longer researched here (plan P1.6,
+ * 28 Oct 2026). Facts already filed under them stay readable.
+ */
+export const notResearchedSections: Section[] = ["brand", "media"];
+export const NOT_RESEARCHED_REASON = "Brand and media are set in Springpod Studio, not researched here";
 export const slots = [
   { slot: "organisation.paragraph", section: "organisation", label: "In one paragraph", table: false },
   { slot: "organisation.entity", section: "organisation", label: "The entity the learner meets", table: false },
@@ -53,9 +60,14 @@ export const slots = [
   { slot: "role.advert", section: "role", label: "Job adverts", table: true },
   { slot: "role.day", section: "role", label: "A day in the role", table: false },
   { slot: "role.vocabulary", section: "role", label: "Vocabulary", table: true },
+  // Places Springpod Studio's LEARN lessons and WORK day plan need (plan P1.8, 28 Oct 2026).
+  { slot: "role.entry-routes", section: "role", label: "Routes into the role", table: false },
+  { slot: "role.progression", section: "role", label: "Where the role leads", table: false },
+  { slot: "role.rewards", section: "role", label: "What people value about the work", table: false },
   { slot: "case.routine", section: "case", label: "The routine", table: false },
   { slot: "case.measurement", section: "case", label: "Measurements and limits", table: true },
-  { slot: "case.equipment", section: "case", label: "Equipment and systems", table: false },
+  { slot: "case.equipment", section: "case", label: "Equipment", table: false },
+  { slot: "case.tools", section: "case", label: "Tools and screens the work happens in", table: false },
   { slot: "case.fault", section: "case", label: "Faults and how they are checked", table: true },
   { slot: "case.safety", section: "case", label: "Safety rules people actually follow", table: false },
   { slot: "case.people", section: "case", label: "People around the role", table: false },
@@ -185,7 +197,8 @@ export interface Organisation extends Base {
 }
 export interface Attributed {
   text: string;
-  sourceId: string;
+  /** Optional since 28 Oct 2026 (plan P1.6); lines saved earlier may carry one. */
+  sourceId?: string;
 }
 /** The profession's own documents for a role (plan §4.6). */
 export interface ApprenticeshipStandard {
@@ -298,15 +311,16 @@ export interface Role extends Base {
   responsibilities: string;
   boundaries: string;
   occupations: Occupation[];
-  /** Pack review state (PRD: draft → in review → ready). Absent = draft. */
+  /**
+   * Retired 28 Oct 2026 (plan P1.3): role review states and the ready
+   * fingerprint. Kept so stored roles and earlier packs still read; nothing
+   * sets or checks them any more.
+   */
   reviewState?: ReviewState;
   reviewStateBy?: string;
   reviewStateAt?: string;
   reviewStateNote?: string;
-  /** Content fingerprint taken when marked ready; edits since revert to draft. */
   readyFingerprint?: string;
-  /** Server-computed: true when content changed after the role was marked ready. */
-  reviewChanged?: boolean;
   /** The profession's own documents (plan §4.6); UK SOC stays the primary classification. */
   standard?: ApprenticeshipStandard;
   ncsUrl?: string;
@@ -384,6 +398,12 @@ export interface Citation {
   sourceId: string;
   quote: string;
   locator: string;
+  /**
+   * Set by the server when the quote was not found word for word in its
+   * source. The fact is kept and flagged for a check rather than refused
+   * (Ollie, 27 Oct 2026: quotations are flagged, not enforced).
+   */
+  unmatched?: boolean;
 }
 export interface Finding extends Base {
   orgId: string;
@@ -458,7 +478,8 @@ export interface ResearchJob extends Base {
   sourceIds?: string[];
   /** Also read the organisation's website; absent = crawl only when no sources were selected. */
   crawl?: boolean;
-  tier: "economy" | "power" | "max";
+  /** Runs before 28 Oct 2026 only: the retired research tier (plan P1.4). */
+  tier?: "economy" | "power" | "max";
   status:
     "queued" | "researching" | "completed" | "gaps" | "failed" | "cancelled";
   stage: string;
@@ -471,6 +492,8 @@ export interface ResearchJob extends Base {
   runs: {
     id: string;
     model: string;
+    /** The section this analysis researched (one per section since 28 Oct 2026). */
+    section?: Section;
     status: string;
     findings: number;
     inputTokens: number;
@@ -546,7 +569,11 @@ interface PackBase {
   status: "draft" | "ready";
   /** Kept under its original key in every schema: research readiness is never the organisation's approval. */
   employerApproval: false;
-  organisation: Organisation;
+  /** Packs since 28 Oct 2026 carry may-use and must-not-say as plain text lines. */
+  organisation: Omit<Organisation, "mayUse" | "mustNotSay"> & {
+    mayUse?: (string | Attributed)[];
+    mustNotSay?: (string | Attributed)[];
+  };
   role: Role;
   findings: Finding[];
   sources: Omit<Source, "blob">[];

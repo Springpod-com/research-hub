@@ -17,7 +17,8 @@ import type {
   OccupationEntry,
   OccupationScheme,
 } from "../shared/occupations.js";
-import { HttpError } from "./domain.js";
+import type { Occupation, Role } from "../shared/types.js";
+import { HttpError, hydrateDatasetMatch } from "./domain.js";
 
 const DATA_DIR =
   process.env.OCCUPATION_DATA_DIR ||
@@ -304,4 +305,46 @@ function explain(
       ? " O*NET describes US occupations; review relevance to the UK setting before use."
       : "";
   return `Keyword match for ${entry.code} ${entry.title}: ${parts.join("; ")}. Suggested by deterministic search, not a published mapping — confirm against the role responsibilities.${jurisdiction}`;
+}
+
+/**
+ * The best dataset match for each scheme the role has no recorded match for,
+ * with the entry's own task statements (Ollie, 27 Oct 2026: every pack carries
+ * occupational data so Studio can suggest WORK day tasks from it). Always
+ * proposed; a researcher's recorded match for a scheme is never replaced.
+ */
+export async function automaticOccupations(
+  role: Pick<Role, "title" | "responsibilities" | "seniority" | "occupations">,
+): Promise<Occupation[]> {
+  const out: Occupation[] = [];
+  for (const scheme of schemes) {
+    if (role.occupations.some((o) => o.scheme === scheme)) continue;
+    const [best] = await search(
+      scheme,
+      { title: role.title, context: role.responsibilities, seniority: role.seniority },
+      1,
+    );
+    if (!best) continue;
+    const found = await getEntry(scheme, best.code);
+    out.push(
+      hydrateDatasetMatch(
+        {
+          scheme,
+          code: best.code,
+          title: best.title,
+          sourceUrl: best.sourceUrl,
+          datasetVersion: best.datasetVersion,
+          rationale: `${best.rationale} Attached automatically when the pack was made; confirm against the role.`,
+          status: "proposed",
+          activities: found.entry.tasks.slice(0, 30),
+          skills: [],
+          knowledge: [],
+          workContext: [],
+          basis: "dataset-search",
+        },
+        found,
+      ),
+    );
+  }
+  return out;
 }

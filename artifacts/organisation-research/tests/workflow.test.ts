@@ -15,8 +15,6 @@ import {
   findingView,
   makePack,
   packMarkdown,
-  roleFingerprint,
-  reviewStateOf,
   sectionsView,
   sourceView,
 } from "../server/domain.js";
@@ -44,19 +42,24 @@ describe("Evidence and immutable pack workflow", () => {
       .send({});
     expect(r.status).toBe(403);
   });
-  it("requires an exact source quotation and the same organisation", async () => {
+  it("flags a quotation the source does not contain and requires the same organisation", async () => {
     const f = fixture.findings[0];
     const route = `/api/organisations/${f.orgId}/findings`;
+    const madeUp = await request(app())
+      .post(route)
+      .send({
+        ...f,
+        citations: [{ ...f.citations[0], quote: "Made up passage" }],
+      });
+    expect(madeUp.status).toBe(201);
+    expect(madeUp.body.citations[0].unmatched).toBe(true);
     expect(
       (
         await request(app())
-          .post(route)
-          .send({
-            ...f,
-            citations: [{ ...f.citations[0], quote: "Made up passage" }],
-          })
+          .patch(`/api/findings/${madeUp.body.id}`)
+          .send({ ...madeUp.body, review: "rejected" })
       ).status,
-    ).toBe(422);
+    ).toBe(200);
     expect(
       (
         await request(app())
@@ -132,8 +135,16 @@ describe("Evidence and immutable pack workflow", () => {
           },
         ],
       });
-    expect(wrongWords.status).toBe(422);
-    expect(wrongWords.body.error).toContain("was not found in");
+    // Flagged, not refused (Ollie, 27 Oct 2026).
+    expect(wrongWords.status).toBe(201);
+    expect(wrongWords.body.citations[0].unmatched).toBe(true);
+    expect(
+      (
+        await request(app())
+          .patch(`/api/findings/${wrongWords.body.id}`)
+          .send({ ...wrongWords.body, review: "rejected" })
+      ).status,
+    ).toBe(200);
   });
   it("validates replacement citations and invented measurement citations", async () => {
     const current = (await request(app()).get("/api/workspace")).body;
@@ -253,14 +264,6 @@ describe("Evidence and immutable pack workflow", () => {
           .send({ ...f, review: "accepted" })
       ).status,
     ).toBe(409);
-    const a = fixture.activities[0];
-    expect(
-      (
-        await request(app())
-          .patch(`/api/activities/${a.id}`)
-          .send({ ...a, review: "accepted" })
-      ).status,
-    ).toBe(200);
   });
   it("bulk-reviews facts atomically through the individual review path", async () => {
     const orgId = fixture.organisations[0].id;
@@ -805,43 +808,6 @@ describe("Knowledge-base derived views and packs", () => {
     } = pack;
     const legacy = { ...basePack, schemaVersion: "1.0.0" } as PackV1;
     expect(packMarkdown(legacy)).toContain("Schema 1.0.0");
-  });
-  it("fingerprints every new pack and readiness input", () => {
-    const mutations: ((w: Workspace) => void)[] = [
-      (w) => {
-        w.organisations[0].factChecker = {
-          name: "Pat Jones",
-          jobTitle: "Fact checker",
-        };
-      },
-      (w) => {
-        Object.assign(w.findings[0], {
-          slot: "role.duty",
-          parts: ["day"],
-          fields: { duty: "Check deliveries" },
-          verified: { by: "Pat Jones", at: new Date().toISOString() },
-        });
-      },
-      (w) => {
-        Object.assign(w.sources[0], {
-          folder: "03-case-material",
-          tier: 1,
-          tierReason: "Confirmed",
-          rights: "organisation-supplied",
-          transcriptSourceId: randomUUID(),
-          timecode: "00:01:20",
-          providedBy: { name: "Pat Jones", jobTitle: "Manager" },
-        });
-      },
-    ];
-    for (const mutate of mutations) {
-      const w = sampleWorkspace();
-      const role = w.roles[0];
-      role.reviewState = "ready";
-      role.readyFingerprint = roleFingerprint(w, role);
-      mutate(w);
-      expect(reviewStateOf(w, role)).toEqual({ state: "draft", changed: true });
-    }
   });
 });
 describe("Web capture", () => {

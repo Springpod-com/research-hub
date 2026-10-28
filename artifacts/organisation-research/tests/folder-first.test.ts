@@ -184,7 +184,7 @@ describe("folder-first research", () => {
       createApp(store, { testMember: researcher }),
     )
       .post(`/api/organisations/${organisation.id}/research`)
-      .send({ tier: "economy", sections: ["role"] });
+      .send({ sections: ["role"] });
     expect(withoutRole.status).toBe(422);
     expect(withoutRole.body.error).toContain("requires a role");
 
@@ -192,8 +192,15 @@ describe("folder-first research", () => {
       createApp(store, { testMember: researcher }),
     )
       .post(`/api/organisations/${organisation.id}/research`)
-      .send({ tier: "economy", sections: ["brand"] });
+      .send({ sections: ["supplied"] });
     expect(gathering.status).toBe(422);
     expect(gathering.body.error).toContain("at least one readable source");
+
+    // Brand and media are set in Studio, not researched here (plan P1.6).
+    const brand = await request(createApp(store, { testMember: researcher }))
+      .post(`/api/organisations/${organisation.id}/research`)
+      .send({ sections: ["brand"] });
+    expect(brand.status).toBe(422);
+    expect(brand.body.error).toContain("set in Springpod Studio");
   });
 });

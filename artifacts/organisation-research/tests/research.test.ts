@@ -7,10 +7,9 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
-it("retains one successful Max run when the second provider fails, excluding invented quotations", async () => {
-  vi.stubEnv("MAX_CLAUDE_MODEL", "claude-test");
+it("keeps a run's supported facts, flagging unmatched quotations and excluding unusable sources", async () => {
+  vi.stubEnv("RESEARCH_MODEL", "claude-test");
   vi.stubEnv("ANTHROPIC_API_KEY", "test-key");
-  vi.stubEnv("MAX_OPENAI_MODEL", "gpt-test");
   const store = await Store.open();
   await store.init();
   const w = sampleWorkspace();
@@ -27,7 +26,6 @@ it("retains one successful Max run when the second provider fails, excluding inv
     ...base(),
     orgId: role.orgId,
     roleId: role.id,
-    tier: "max" as const,
     status: "researching" as const,
     stage: "Testing",
     errors: [],
@@ -60,6 +58,18 @@ it("retains one successful Max run when the second provider fails, excluding inv
           {
             sourceId: source.id,
             quote: "These words do not exist.",
+            locator: "Paragraph 1",
+          },
+        ],
+        rationale: "Test",
+      },
+      {
+        claim: "Cites a source that does not exist",
+        kind: "company",
+        citations: [
+          {
+            sourceId: "00000000-0000-4000-8000-000000000000",
+            quote: "Anything.",
             locator: "Paragraph 1",
           },
         ],
@@ -131,10 +141,7 @@ it("retains one successful Max run when the second provider fails, excluding inv
     await processJob(store, job.id);
     const result = await store.read();
     expect(result.jobs[0].status).toBe("gaps");
-    expect(result.jobs[0].runs.map((r) => r.status).sort()).toEqual([
-      "completed",
-      "failed",
-    ]);
+    expect(result.jobs[0].runs.map((r) => r.status)).toEqual(["completed"]);
     expect(result.findings.some((f) => f.claim === "Valid new finding")).toBe(
       true,
     );
@@ -144,8 +151,18 @@ it("retains one successful Max run when the second provider fails, excluding inv
     ).toBe(
       "Coordinators record quantity differences and prepare a handover for the next shift.",
     );
-    expect(result.findings.some((f) => f.claim === "Invented claim")).toBe(
-      false,
+    const invented = result.findings.find((f) => f.claim === "Invented claim");
+    expect(invented?.citations[0].unmatched).toBe(true);
+    expect(invented?.citations[0].quote).toBe("These words do not exist.");
+    expect(
+      result.findings.find((f) => f.claim === "Valid new finding")?.citations[0]
+        .unmatched,
+    ).toBeUndefined();
+    expect(
+      result.findings.some((f) => f.claim === "Cites a source that does not exist"),
+    ).toBe(false);
+    expect(result.jobs[0].errors).toContain(
+      "1 fact was kept with a quote not found word for word in its source; check it against the source.",
     );
     const retained = result.findings.find((f) => f.claim === "Keep this claim");
     expect(retained?.slot).toBe("role.duty");
@@ -159,12 +176,11 @@ it("retains one successful Max run when the second provider fails, excluding inv
     const outside = result.findings.find(
       (f) => f.claim === "Brand claim outside the requested folder",
     );
-    expect(outside?.slot).toBe("brand.logo");
+    // Brand is set in Studio, not researched here (plan P1.6): the fact is
+    // kept in the register but not placed under Brand.
+    expect(outside?.slot).toBe("none");
     expect(result.jobs[0].errors).toContain(
-      "Placed 1 fact in other folders: Brand (1)",
-    );
-    expect(result.jobs[0].errors).toContain(
-      "Section Brand was already reviewed; new facts need review",
+      "Fact placed outside the requested folders: brand.logo → left unplaced",
     );
     expect(result.organisations[0].sectionStatus?.brand?.stage).toBe("reviewed");
     expect(result.roles[0].sectionStatus?.role?.stage).toBe("extracted");
@@ -178,9 +194,8 @@ it("retains one successful Max run when the second provider fails, excluding inv
 });
 
 it("leaves role-scoped placements unplaced for organisation-wide runs", async () => {
-  vi.stubEnv("MAX_CLAUDE_MODEL", "claude-test");
+  vi.stubEnv("RESEARCH_MODEL", "claude-test");
   vi.stubEnv("ANTHROPIC_API_KEY", "test-key");
-  vi.stubEnv("MAX_OPENAI_MODEL", "gpt-test");
   const store = await Store.open();
   await store.init();
   const w = sampleWorkspace();
@@ -188,7 +203,6 @@ it("leaves role-scoped placements unplaced for organisation-wide runs", async ()
   const job = {
     ...base(),
     orgId: w.organisations[0].id,
-    tier: "max" as const,
     status: "researching" as const,
     stage: "Testing",
     errors: [],

@@ -1,4 +1,6 @@
 import {
+  NOT_RESEARCHED_REASON,
+  notResearchedSections,
   sections,
   type Folder,
   type ResearchJob,
@@ -10,7 +12,9 @@ export const sectionSelectionReason = (
   section: SectionSummary,
   roleId?: string,
 ) =>
-  section.roleScoped && !roleId
+  notResearchedSections.includes(section.section)
+    ? NOT_RESEARCHED_REASON
+    : section.roleScoped && !roleId
     ? "Choose a role to use this folder"
     : !(section.readableSourceIds || section.sourceIds).length
       ? "Add at least one source first"

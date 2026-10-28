@@ -12,18 +12,22 @@ import { Store } from "../server/store.js";
 import { createApp } from "../server/app.js";
 import {
   processJob,
-  DEFAULT_INSTRUCTIONS,
+  researchReady,
+  INSTRUCTIONS,
   OUTPUT_CONTRACT,
 } from "../server/research.js";
+import { researchModel } from "../server/models.js";
 import { base } from "../server/domain.js";
 import { sampleWorkspace, reviewer } from "./fixtures.js";
 import type { Workspace } from "../shared/types.js";
+
+// Plan P1.4 (28 Oct 2026): one research model from the environment, the
+// prompt kept in code, no tiers and no settings page.
 
 let store: Store;
 let fixture: Workspace;
 const admin = { ...reviewer, userId: "user_admin", role: "admin" as const };
 const asAdmin = () => createApp(store, { testMember: admin });
-const asReviewer = () => createApp(store, { testMember: reviewer });
 
 beforeAll(async () => {
   store = await Store.open();
@@ -39,150 +43,68 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe("Research settings", () => {
-  it("shows environment defaults and lets an administrator change a verified model", async () => {
-    vi.stubEnv("POWER_MODEL", "claude-env");
-    vi.stubEnv("ANTHROPIC_API_KEY", "test-key");
-    const before = await request(asReviewer()).get("/api/research-settings");
-    expect(before.status).toBe(200);
-    const power = before.body.slots.find((s: any) => s.slot === "power");
-    expect(power).toMatchObject({
-      model: "claude-env",
-      source: "environment",
-      provider: "anthropic",
+describe("The research model", () => {
+  it("takes RESEARCH_MODEL, falls back to POWER_MODEL, and never guesses", () => {
+    expect(researchModel({})).toEqual({});
+    expect(researchModel({ POWER_MODEL: "claude-sonnet-5" })).toEqual({
+      model: "claude-sonnet-5",
+      envVar: "POWER_MODEL",
+      problem: undefined,
     });
-    expect(before.body.tiers.power).toBe(true);
-    expect(before.body.prompt).toMatchObject({ version: 0, isDefault: true });
-
-    // Only administrators change models.
     expect(
-      (
-        await request(asReviewer())
-          .put("/api/research-settings/models/power")
-          .send({ model: "claude-sonnet-5" })
-      ).status,
-    ).toBe(403);
-    // A model that belongs to a different provider is refused outright.
-    const wrong = await request(asAdmin())
-      .put("/api/research-settings/models/power")
-      .send({ model: "gpt-5.6-terra" });
-    expect(wrong.status).toBe(422);
-    expect(wrong.body.error).toContain("OpenAI");
-
-    // The chosen model must answer a live request before it is stored.
-    const calls: string[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (_url: string, init: RequestInit) => {
-        const body = JSON.parse(String(init.body));
-        calls.push(body.model);
-        return body.model === "claude-broken"
-          ? new Response("Not found", { status: 404 })
-          : new Response(
-              JSON.stringify({
-                content: [{ type: "text", text: '{"ok":true}' }],
-                usage: { input_tokens: 10, output_tokens: 3 },
-              }),
-              { status: 200 },
-            );
-      }),
+      researchModel({ RESEARCH_MODEL: "gemini-3-flash-preview", POWER_MODEL: "claude-sonnet-5" }).model,
+    ).toBe("gemini-3-flash-preview");
+    expect(researchModel({ RESEARCH_MODEL: "not a model id" }).problem).toContain(
+      "not a valid model ID",
     );
-    const broken = await request(asAdmin())
-      .put("/api/research-settings/models/power")
-      .send({ model: "claude-broken" });
-    expect(broken.status).toBe(422);
-    expect(broken.body.error).toContain("did not answer");
-    expect((await store.read()).settings?.models.power).toBeUndefined();
-
-    const changed = await request(asAdmin())
-      .put("/api/research-settings/models/power")
-      .send({ model: "claude-sonnet-5" });
-    expect(changed.status).toBe(200);
-    expect(calls).toEqual(["claude-broken", "claude-sonnet-5"]);
-    expect(
-      changed.body.slots.find((s: any) => s.slot === "power"),
-    ).toMatchObject({ model: "claude-sonnet-5", source: "workspace" });
-    const w = await store.read();
-    expect(w.settings?.models.power).toBe("claude-sonnet-5");
-    expect(
-      w.audit.some(
-        (a) =>
-          a.actor === admin.userId &&
-          a.action.includes("claude-env → claude-sonnet-5"),
-      ),
-    ).toBe(true);
-
-    // Back to the environment default without a probe.
-    const reset = await request(asAdmin())
-      .put("/api/research-settings/models/power")
-      .send({ model: "" });
-    expect(reset.status).toBe(200);
-    expect(reset.body.slots.find((s: any) => s.slot === "power")).toMatchObject(
-      { model: "claude-env", source: "environment" },
-    );
-    expect(calls).toHaveLength(2);
   });
 
-  it("does not treat a tier as ready when the environment default belongs to another provider", async () => {
-    vi.stubEnv("ECONOMY_MODEL", "gpt-5-mini");
-    vi.stubEnv("GEMINI_API_KEY", "test-key");
-    const r = await request(asReviewer()).get("/api/research-settings");
-    expect(r.status).toBe(200);
-    expect(r.body.tiers.economy).toBe(false);
-    const economy = r.body.slots.find((s: any) => s.slot === "economy");
-    expect(economy.model).toBe("gpt-5-mini");
-    expect(economy.problem).toContain("OpenAI");
-    // Clearing an override cannot fall back to an unusable default either.
-    const cleared = await request(asAdmin())
-      .put("/api/research-settings/models/economy")
-      .send({ model: "" });
-    expect(cleared.status).toBe(422);
-  });
-
-  it("versions prompt edits, rejects stale saves and records the version on research runs", async () => {
-    vi.stubEnv("POWER_MODEL", "claude-test");
+  it("is ready only with a usable model and its provider connected", () => {
+    vi.stubEnv("RESEARCH_MODEL", "claude-test");
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    vi.stubEnv("AI_INTEGRATIONS_ANTHROPIC_BASE_URL", "");
+    expect(researchReady()).toBe(false);
     vi.stubEnv("ANTHROPIC_API_KEY", "test-key");
+    expect(researchReady()).toBe(true);
+    vi.stubEnv("RESEARCH_MODEL", "gpt-test");
+    vi.stubEnv("OPENAI_API_KEY", "");
+    vi.stubEnv("AI_INTEGRATIONS_OPENAI_BASE_URL", "");
+    expect(researchReady()).toBe(false);
+  });
+
+  it("reports the model on the session and has no settings routes", async () => {
+    vi.stubEnv("RESEARCH_MODEL", "claude-test");
+    vi.stubEnv("ANTHROPIC_API_KEY", "test-key");
+    const session = await request(asAdmin()).get("/api/session");
+    expect(session.body.research).toEqual({ ready: true, model: "claude-test" });
+    expect((await request(asAdmin()).get("/api/research-settings")).status).toBe(404);
     expect(
       (
-        await request(asReviewer())
+        await request(asAdmin())
           .put("/api/research-settings/prompt")
           .send({ instructions: "Changed", version: 0 })
       ).status,
-    ).toBe(403);
-    expect(
-      (
-        await request(asAdmin())
-          .put("/api/research-settings/prompt")
-          .send({ instructions: "   ", version: 0 })
-      ).status,
-    ).toBe(422);
-    const custom = `${DEFAULT_INSTRUCTIONS}\nAlways note the shift pattern.`;
-    const saved = await request(asAdmin())
-      .put("/api/research-settings/prompt")
-      .send({ instructions: custom, version: 0 });
-    expect(saved.status).toBe(200);
-    expect(saved.body.prompt).toMatchObject({
-      version: 1,
-      isDefault: false,
-      updatedBy: admin.userId,
-      instructions: custom,
-    });
-    // A save based on the version before this edit is refused.
-    expect(
-      (
-        await request(asAdmin())
-          .put("/api/research-settings/prompt")
-          .send({ instructions: "Another edit", version: 0 })
-      ).status,
-    ).toBe(409);
+    ).toBe(404);
+  });
 
-    // The worker sends the saved instructions followed by the fixed contract.
+  it("refuses to start research when no model is set", async () => {
+    vi.stubEnv("RESEARCH_MODEL", "");
+    vi.stubEnv("POWER_MODEL", "");
+    const r = await request(asAdmin())
+      .post(`/api/organisations/${fixture.organisations[0].id}/research`)
+      .send({ roleId: fixture.roles[0].id });
+    expect(r.status).toBe(503);
+    expect(r.body.error).toContain("RESEARCH_MODEL");
+  });
+
+  it("sends the fixed instructions, then the output contract and the sources, in one call", async () => {
+    vi.stubEnv("RESEARCH_MODEL", "claude-test");
+    vi.stubEnv("ANTHROPIC_API_KEY", "test-key");
     const role = fixture.roles[0];
     const job = {
       ...base(),
       orgId: role.orgId,
       roleId: role.id,
-      tier: "power" as const,
       status: "researching" as const,
       stage: "Testing",
       errors: [],
@@ -193,31 +115,18 @@ describe("Research settings", () => {
     await store.transact((w) => {
       w.jobs.push(job);
     });
-    let sent = "";
+    const sent: { model: string; content: string }[] = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (_url: string, init: RequestInit) => {
-        sent = JSON.parse(String(init.body)).messages[0].content;
+        const body = JSON.parse(String(init.body));
+        sent.push({ model: body.model, content: body.messages[0].content });
         return new Response(
           JSON.stringify({
             content: [
               {
                 type: "text",
-                text: JSON.stringify({
-                  findings: [],
-                  questions: [],
-                  activities: [
-                    {
-                      title: "Ignored while parked",
-                      action: "x",
-                      output: "x",
-                      materials: "x",
-                      learning: "x",
-                      confirmation: "x",
-                      findingIndexes: [],
-                    },
-                  ],
-                }),
+                text: JSON.stringify({ findings: [], questions: [] }),
               },
             ],
             usage: { input_tokens: 10, output_tokens: 3 },
@@ -227,28 +136,15 @@ describe("Research settings", () => {
       }),
     );
     await processJob(store, job.id);
-    const after = await store.read();
-    const done = after.jobs.find((j) => j.id === job.id)!;
-    expect(done.promptVersion).toBe(1);
-    expect(sent.startsWith(custom)).toBe(true);
-    expect(sent).toContain(OUTPUT_CONTRACT);
-    expect(sent).toContain("SOURCES BEGIN");
+    const done = (await store.read()).jobs.find((j) => j.id === job.id)!;
+    expect(sent).toHaveLength(1);
+    expect(sent[0].model).toBe("claude-test");
+    expect(sent[0].content.startsWith(INSTRUCTIONS)).toBe(true);
+    expect(sent[0].content).toContain(OUTPUT_CONTRACT);
+    expect(sent[0].content).toContain("SOURCES BEGIN");
+    expect(done.runs).toHaveLength(1);
     expect(done.runs[0].status).toBe("completed");
-    // Activity candidates are parked: returned proposals are not stored.
-    expect(
-      after.activities.some((a) => a.title === "Ignored while parked"),
-    ).toBe(false);
-
-    // Reset keeps the version moving so old runs stay attributable.
-    const reset = await request(asAdmin())
-      .put("/api/research-settings/prompt")
-      .send({ reset: true, version: 1 });
-    expect(reset.status).toBe(200);
-    expect(reset.body.prompt).toMatchObject({
-      version: 2,
-      isDefault: true,
-      instructions: DEFAULT_INSTRUCTIONS,
-    });
+    expect(done.tier).toBeUndefined();
     await store.transact((w) => {
       w.jobs = w.jobs.filter((j) => j.id !== job.id);
     });

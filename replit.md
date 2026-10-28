@@ -20,7 +20,7 @@ Springpod's internal organisation and role research workspace: researchers colle
 
 Runtime-managed: `DATABASE_URL` (the project's own Replit PostgreSQL; verified empty and dedicated before use). Shared env var: `DATABASE_CONFIRMED_STANDALONE=true`.
 
-Owner-provided values (see README table): Replit-managed Clerk keys (`CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`), `BOOTSTRAP_ADMIN_EMAILS` (verified primary email of the first administrator; `BOOTSTRAP_ADMIN_IDS` still works), Replit AI-integration proxy secrets, exact model IDs (`ECONOMY_MODEL`, `POWER_MODEL`, `MAX_CLAUDE_MODEL`, `MAX_OPENAI_MODEL` — never guessed or defaulted), production-only `UPLOAD_SCAN_COMMAND=scripts/clamav/scan-upload.sh`, `REGISTRY_API_KEY` (Springpod App Registry; heartbeat on every production start, see `artifacts/organisation-research/docs/app-registry.md`). Optional: `APP_ORIGINS` (defaults to `REPLIT_DOMAINS`/dev domain), `CLERK_PROXY_DISABLED=true` for a self-owned Clerk domain, `CLAMAV_SIDECAR`, `CLAMAV_RUN_DIR`, `CLAMAV_DB_DIR`, `OCCUPATION_DATA_DIR`.
+Owner-provided values (see README table): Replit-managed Clerk keys (`CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`), `BOOTSTRAP_ADMIN_EMAILS` (verified primary email of the first administrator; `BOOTSTRAP_ADMIN_IDS` still works), Replit AI-integration proxy secrets, the exact research model ID (`RESEARCH_MODEL`, never guessed or defaulted; `POWER_MODEL` is still read as a fallback until a deployment sets it. One model, one analysis per run, prompt kept in code: plan P1.4, 28 Oct 2026), production-only `UPLOAD_SCAN_COMMAND=scripts/clamav/scan-upload.sh`, `REGISTRY_API_KEY` (Springpod App Registry; heartbeat on every production start, see `artifacts/organisation-research/docs/app-registry.md`). Optional: `APP_ORIGINS` (defaults to `REPLIT_DOMAINS`/dev domain), `CLERK_PROXY_DISABLED=true` for a self-owned Clerk domain, `CLAMAV_SIDECAR`, `CLAMAV_RUN_DIR`, `CLAMAV_DB_DIR`, `OCCUPATION_DATA_DIR`.
 
 ## Stack
 
@@ -36,13 +36,17 @@ Owner-provided values (see README table): Replit-managed Clerk keys (`CLERK_PUBL
 - Dev keeps the API on a fixed private port (3001) because the workflow's `PORT` belongs to Vite; production runs a single process on `PORT` serving frontend + API from one origin.
 - Deployment target is Reserved VM (`deploymentTarget = "vm"` in `.replit`) because the research worker is embedded in the web process and must stay running.
 - Template `api-server` and `lib/*` packages were removed: the app owns `/api` itself and the shared OpenAPI/Drizzle libs were unused.
+- The template `mockup-sandbox` artifact and the `@workspace/scripts` package (only a hello script) were removed on 28 Oct 2026 (plan P1.1); `scripts/post-merge.sh` stays because `.replit` runs it.
 - Occupational reference data is bundled, versioned JSON (UK SOC 2020 primary, O*NET supplementary) loaded in memory by `server/occupations.ts`; matching is deterministic keyword retrieval with the matched terms as rationale. No live API, no model, no DB schema for it.
 - Approval is simplified: evidence-backed facts are registered by default and
   may only be excluded or restored; folders move automatically from gathering
   to extracted and can carry an optional reviewer tick. Pack creation has one
   immutable schema-2 path, blocked only by an active extraction; readiness is
   retained as an advisory Open items list.
-- Refreshing a web source never mutates the earlier capture: a new source supersedes it and findings whose quotation disappeared are flagged for re-review (readiness gate) until reviewed again.
+- Retired on 28 Oct 2026 (plan P1.3, data kept): role review states and the ready fingerprint, activity candidates (packs carry an empty `activities` list), and source refresh with its capture diff. To re-read a page, capture it again as a new source.
+- Places Studio needs (plan P1.8, 28 Oct 2026): `role.entry-routes`, `role.progression`, `role.rewards` and `case.tools` were added; `case.equipment` is now labelled Equipment. Brand and media slots are not offered to the model and their gaps are not places to fill.
+- Forms trimmed (plan P1.6, 28 Oct 2026; stored values kept): organisations keep name, website, country, summary and the may-use and must-not-say lines (plain text; Studio reads them as text lines, so packs export them as strings); roles keep title, location, seniority, responsibilities and boundaries; material asks only whether it came from the organisation (that sets `client-confirmed`, so tier 1). Brand and media are not researched here (`notResearchedSections`): they are set in Studio.
+- Quotations are flagged, not enforced (plan P1.2): a citation whose quote is not in its source is kept with `unmatched: true`, shown with a warning and named in the pack's limitations.
 - Four dependencies are pinned one patch behind the supplied lockfile because the workspace enforces a 24-hour minimum package age: `@clerk/express` 2.1.67, `@clerk/react` 6.15.2, `@types/node` 22.20.2, `prettier` 3.9.6. Bump back once the versions are older than a day.
 
 ## Product rules (from the handover brief)

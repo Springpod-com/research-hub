@@ -25,7 +25,6 @@ import {
   findingInput,
   citation,
   questionInput,
-  activityInput,
   occupationInput,
   optionalText,
   review,
@@ -34,10 +33,7 @@ import {
   readiness,
   makePack,
   packMarkdown,
-  roleView,
   suggestOrganisations,
-  captureDiff,
-  captureLineage,
   hydrateDatasetMatch,
   sourceView,
   findingView,
@@ -58,6 +54,7 @@ import {
 } from "./members.js";
 import {
   datasetSummaries,
+  automaticOccupations,
   getEntry,
   search as searchOccupations,
   schemes as occupationSchemes,
@@ -70,26 +67,15 @@ import type {
   Source,
   Workspace,
 } from "../shared/types.js";
-import { sectionNoteMaxLength, sections, slots } from "../shared/types.js";
 import {
-  providers,
-  providerAccess,
-  probeModel,
-  promptSettings,
-  DEFAULT_INSTRUCTIONS,
-  OUTPUT_CONTRACT,
-  CONTEXT_NOTE,
-} from "./research.js";
-import {
-  SLOTS,
-  CATALOGUE,
-  PROVIDER_LABEL,
-  MODEL_ID,
-  providerOf,
-  resolveModel,
-  slotProblem,
-  settingsOf,
-} from "./models.js";
+  NOT_RESEARCHED_REASON,
+  notResearchedSections,
+  sectionNoteMaxLength,
+  sections,
+  slots,
+} from "../shared/types.js";
+import { researchReady } from "./research.js";
+import { researchModel } from "./models.js";
 import { fetchPublic, extractPage } from "./retrieval.js";
 import { allowedOrigins } from "./origins.js";
 import {
@@ -100,12 +86,7 @@ import {
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import {
-  confirmationMarkdown,
-  packDocx,
-  packFolderZipStream,
-  packZipName,
-} from "./export.js";
+import { packZip, packZipName } from "./export.js";
 export interface AppOptions {
   testMember?: Member;
   preview?: boolean;
@@ -473,7 +454,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
       res.json({
         ...res.locals.member,
         demo: !!options.preview,
-        providers: providers(await store.read()),
+        research: { ready: researchReady(), model: researchModel().model ?? null },
       }),
     ),
   );
@@ -498,7 +479,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
       const w = await store.read();
       res.json({
         ...w,
-        roles: w.roles.map((r) => roleView(w, r)),
+        roles: w.roles,
         sources: w.sources.map(({ blob, ...s }) => sourceView(s)),
         findings: w.findings.map((f) => findingView(w, f)),
         members:
@@ -711,12 +692,6 @@ export function createApp(store: Store, options: AppOptions = {}) {
           return { id: role.id, deleted, sourcesUnlinked };
         }),
       );
-    }),
-  );
-  app.post(
-    "/api/roles/:id/review-state",
-    handler(async () => {
-      throw new HttpError(422, "Role approval states are no longer used.");
     }),
   );
   // Official occupational reference data (bundled UK SOC 2020 and O*NET).
@@ -978,106 +953,6 @@ export function createApp(store: Store, options: AppOptions = {}) {
       );
     }),
   );
-  app.post(
-    "/api/sources/:id/refresh",
-    handler(async (req, res) => {
-      const current = get((await store.read()).sources, String(req.params.id));
-      if (current.kind !== "web" || !current.url)
-        throw new HttpError(422, "Only captured web pages can be refreshed.");
-      if (current.supersededBy)
-        throw new HttpError(
-          409,
-          "This capture was already refreshed. Refresh the latest capture instead.",
-        );
-      const page = await fetchPublic(current.url);
-      const p = extractPage(page.html, page.url);
-      res.status(201).json(
-        await mutate(req, res, (w, m) => {
-          const previous = get(w.sources, current.id);
-          if (previous.supersededBy)
-            throw new HttpError(409, "This capture was already refreshed.");
-          const source: Source = {
-            ...base(),
-            orgId: previous.orgId,
-            roleIds: [...previous.roleIds],
-            title: p.title,
-            text: p.text,
-            url: page.url,
-            kind: "web",
-            permission: previous.permission,
-            suppliedBy: "Public website",
-            verification: "public-source",
-            publishedAt: "",
-            retrievedAt: now(),
-            locator: "Captured page excerpt",
-            runIds: [],
-            supersedes: previous.id,
-            folder: previous.folder,
-            tier: previous.tier,
-            tierReason: previous.tierReason,
-            rights: previous.rights,
-            transcriptSourceId: previous.transcriptSourceId,
-            timecode: previous.timecode,
-            providedBy: previous.providedBy
-              ? { ...previous.providedBy }
-              : undefined,
-          };
-          // Findings cite whichever capture of this page they were made
-          // against, so every earlier capture in the lineage is checked.
-          const lineage = new Set(captureLineage(w, previous));
-          previous.supersededBy = source.id;
-          previous.version++;
-          previous.updatedAt = now();
-          w.sources.push(source);
-          const at = source.retrievedAt;
-          const affected: string[] = [];
-          const refreshedQuotationIndex = buildQuotationIndex(p.text);
-          const previousQuotationIndex = buildQuotationIndex(previous.text);
-          for (const f of w.findings) {
-            const cited = f.citations.filter((c) => lineage.has(c.sourceId));
-            if (!cited.length) continue;
-            const quoteFound = cited.every(
-              (c) => locateQuotation(refreshedQuotationIndex, c.quote) !== null,
-            );
-            // Each quotation is judged on its own: one that was still in the
-            // last capture and is gone now is a new disappearance, however
-            // many others were already missing (and flagged) before.
-            const newlyMissing = cited.some(
-              (c) =>
-                locateQuotation(previousQuotationIndex, c.quote) !== null &&
-                locateQuotation(refreshedQuotationIndex, c.quote) === null,
-            );
-            if (!quoteFound && !newlyMissing) continue;
-            f.sourceChanges = [
-              ...(f.sourceChanges || []),
-              { at, sourceId: previous.id, newSourceId: source.id, quoteFound },
-            ];
-            // Bump so a review panel opened before the refresh cannot save
-            // over the change without seeing it (stale saves get 409).
-            f.version++;
-            f.updatedAt = at;
-            if (!quoteFound) affected.push(f.id);
-          }
-          const changed = previous.text !== p.text;
-          source.captureDiff = {
-            previousId: previous.id,
-            changed,
-            ...captureDiff(previous.text, p.text),
-            affectedFindingIds: affected,
-          };
-          audit(
-            w,
-            m.userId,
-            changed
-              ? `Source refreshed; ${affected.length} fact(s) need re-review`
-              : "Source refreshed; no text change",
-            source.id,
-          );
-          return { source: sourceView(source), ...source.captureDiff };
-        }),
-      );
-    }),
-  );
   const boundedMemoryStorage: multer.StorageEngine = {
     _handleFile(_req, file, done) {
       const cap = file.originalname.toLowerCase().endsWith(".zip")
@@ -1188,6 +1063,10 @@ export function createApp(store: Store, options: AppOptions = {}) {
         })
         .parse(req.body);
       requireTierReason(uploadKnowledge);
+      // One tick since 28 Oct 2026 (plan P1.6): material that came from the
+      // organisation is confirmed by it, which makes its facts tier 1.
+      const verification =
+        req.body.fromOrganisation === "true" ? "client-confirmed" : "user-supplied";
       const ext = path.extname(f.originalname).toLowerCase();
       const textTypes: Record<string, string> = {
         ".txt": "text/plain",
@@ -1311,7 +1190,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
           text: "",
           locator: "Workplace reference image",
           permission: "awaiting-confirmation",
-          verification: "user-supplied",
+          verification,
           suppliedBy: res.locals.member.name,
           publishedAt: "",
           retrievedAt: now(),
@@ -1411,7 +1290,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
         text: content.slice(0, 100000),
         locator,
         permission: "awaiting-confirmation",
-        verification: "user-supplied",
+        verification,
         suppliedBy: res.locals.member.name,
         publishedAt: "",
         retrievedAt: now(),
@@ -1995,50 +1874,6 @@ export function createApp(store: Store, options: AppOptions = {}) {
       res.json(response);
     }),
   );
-  app.post(
-    "/api/organisations/:id/activities",
-    handler(async (req, res) => {
-      const data = activityInput.parse(req.body);
-      res.status(201).json(
-        await mutate(req, res, (w, m) => {
-          const orgId = String(req.params.id);
-          roleInOrg(w, orgId, data.roleId);
-          for (const id of data.findingIds) {
-            const f = get(w.findings, id);
-            if (f.orgId !== orgId || (f.roleId && f.roleId !== data.roleId))
-              throw new HttpError(422, "Fact is outside this role.");
-          }
-          const a = {
-            ...base(),
-            ...data,
-            orgId,
-            review: "unreviewed" as const,
-            runIds: [],
-          };
-          w.activities.push(a);
-          audit(w, m.userId, "Activity proposed", a.id);
-          return a;
-        }),
-      );
-    }),
-  );
-  app.patch(
-    "/api/activities/:id",
-    handler(async (req, res) => {
-      const data = z
-        .object({ review, confirmation: optionalText })
-        .parse(req.body);
-      res.json(
-        await mutate(req, res, (w, m) => {
-          const a = get(w.activities, String(req.params.id));
-          touch(a, req.body.version);
-          Object.assign(a, data);
-          audit(w, m.userId, "Activity reviewed", a.id);
-          return a;
-        }),
-      );
-    }),
-  );
   app.get(
     "/api/roles/:id/readiness",
     handler(async (req, res) => {
@@ -2051,6 +1886,9 @@ export function createApp(store: Store, options: AppOptions = {}) {
     "/api/roles/:id/packs",
     handler(async (req, res) => {
       z.object({ status: z.enum(["draft", "ready"]).optional() }).parse(req.body);
+      const automatic = await automaticOccupations(
+        get((await store.read()).roles, String(req.params.id)),
+      );
       res.status(201).json(
         await mutate(req, res, async (w, m, db) => {
           const role = get(w.roles, String(req.params.id));
@@ -2066,6 +1904,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
             "ready",
             Number(previous.rows[0].revision) + 1,
             m.name,
+            automatic,
           );
           await db.query(
             "INSERT INTO research_packs(id,org_id,role_id,revision,snapshot) VALUES($1,$2,$3,$4,$5)",
@@ -2078,22 +1917,6 @@ export function createApp(store: Store, options: AppOptions = {}) {
     }),
   );
   app.get(
-    "/api/packs/:id/docx",
-    handler(async (req, res) => {
-      const pack = get(await store.packs(), String(req.params.id));
-      res.setHeader("Cache-Control", "private, no-store");
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename="${packZipName(pack).replace(/\.zip$/, ".docx")}"`,
-      );
-      res
-        .type(
-          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        )
-        .send(await packDocx(pack));
-    }),
-  );
-  app.get(
     "/api/packs/:id/zip",
     handler(async (req, res) => {
       const pack = get(await store.packs(), String(req.params.id));
@@ -2102,30 +1925,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
         "Content-Disposition",
         `attachment; filename="${packZipName(pack)}"`,
       );
-      res.type("application/zip");
-      const stream = await packFolderZipStream(pack, store);
-      stream.on("error", () => {
-        if (!res.headersSent) res.status(500);
-        res.end();
-      });
-      stream.pipe(res);
-    }),
-  );
-  app.get(
-    "/api/packs/:id/confirm.md",
-    handler(async (req, res) => {
-      const pack = get(await store.packs(), String(req.params.id));
-      if (pack.schemaVersion !== "2.0.0")
-        throw new HttpError(
-          404,
-          "The confirmation page is not available for schema 1.0.0 packs.",
-        );
-      res.setHeader("Cache-Control", "private, no-store");
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename="for-organisation-to-confirm-r${pack.revision}.md"`,
-      );
-      res.type("text/markdown").send(confirmationMarkdown(pack));
+      res.type("application/zip").send(await packZip(pack));
     }),
   );
   app.get(
@@ -2149,7 +1949,6 @@ export function createApp(store: Store, options: AppOptions = {}) {
       const data = z
         .object({
           roleId: z.string().uuid().optional(),
-          tier: z.enum(["economy", "power", "max"]),
           sections: z
             .array(
               z.enum(
@@ -2169,6 +1968,8 @@ export function createApp(store: Store, options: AppOptions = {}) {
         await mutate(req, res, (w, m) => {
           const orgId = String(req.params.id);
           roleInOrg(w, orgId, data.roleId);
+          if (data.sections?.some((sectionId) => notResearchedSections.includes(sectionId as never)))
+            throw new HttpError(422, `${NOT_RESEARCHED_REASON}.`);
           if (data.sections?.some((sectionId) => sections.find((item) => item.section === sectionId)?.roleScoped) && !data.roleId)
             throw new HttpError(422, "A selected folder requires a role from this organisation.");
           for (const sectionId of data.sections || []) {
@@ -2202,10 +2003,10 @@ export function createApp(store: Store, options: AppOptions = {}) {
                   "Every selected source must be readable and belong to this organisation and role.",
                 );
             }
-          if (!providers(w)[data.tier])
+          if (!researchReady())
             throw new HttpError(
               503,
-              "The selected research tier is not configured. Check the provider keys and models under Research connections.",
+              "Research is not set up on this server. Set RESEARCH_MODEL to an exact model ID and connect its provider.",
             );
           const active = w.jobs.find(
             (j) =>
@@ -2340,146 +2141,6 @@ export function createApp(store: Store, options: AppOptions = {}) {
             if (!withdrawInvitation(w, m, String(req.params.id)))
               throw new HttpError(404, "That invitation no longer exists.");
             return { ok: true };
-          },
-          true,
-        ),
-      );
-    }),
-  );
-  // Research settings: which model each connection uses and the editable
-  // research instructions. Everyone can read them; administrators change them.
-  const settingsView = (w: Workspace) => ({
-    slots: SLOTS.map((info) => {
-      const resolved = resolveModel(w, info.slot);
-      return {
-        ...info,
-        providerLabel: PROVIDER_LABEL[info.provider],
-        model: resolved.model ?? null,
-        source: resolved.source,
-        problem: resolved.problem ?? null,
-        environmentModel: process.env[info.envVar]?.trim() || null,
-        access: !!providerAccess(info.provider),
-        options: CATALOGUE[info.provider],
-      };
-    }),
-    tiers: providers(w),
-    prompt: promptSettings(w),
-    defaultInstructions: DEFAULT_INSTRUCTIONS,
-    contract: OUTPUT_CONTRACT,
-    contextNote: CONTEXT_NOTE,
-  });
-  app.get(
-    "/api/research-settings",
-    handler(async (_req, res) => res.json(settingsView(await store.read()))),
-  );
-  app.put(
-    "/api/research-settings/models/:slot",
-    handler(async (req, res) => {
-      const info = SLOTS.find((s) => s.slot === req.params.slot);
-      if (!info) throw new HttpError(404, "Unknown research connection.");
-      const { model } = z
-        .object({ model: z.string().trim().max(100) })
-        .parse(req.body);
-      if ((res.locals.member as Member).role !== "admin")
-        throw new HttpError(403, "Administrator access required.");
-      if (model) {
-        if (!MODEL_ID.test(model))
-          throw new HttpError(422, "Enter a model ID such as claude-sonnet-5.");
-        if (providerOf(model) !== info.provider)
-          throw new HttpError(
-            422,
-            `${info.label} runs on ${PROVIDER_LABEL[info.provider]}; "${model}" would be sent to ${PROVIDER_LABEL[providerOf(model)]}.`,
-          );
-        if (!providerAccess(info.provider))
-          throw new HttpError(
-            422,
-            `No ${PROVIDER_LABEL[info.provider]} connection is configured on the server, so the model cannot be verified.`,
-          );
-        // Verified live before anything is stored: a saved model must answer.
-        try {
-          await probeModel(model);
-        } catch (e) {
-          throw new HttpError(
-            422,
-            `"${model}" did not answer through the ${PROVIDER_LABEL[info.provider]} connection: ${(e as Error).message}`,
-          );
-        }
-      } else {
-        const env = process.env[info.envVar]?.trim();
-        if (!env)
-          throw new HttpError(
-            422,
-            `There is no environment default for ${info.label}; choose a model instead.`,
-          );
-        const problem = slotProblem(info, env);
-        if (problem) throw new HttpError(422, problem);
-      }
-      res.json(
-        await mutate(
-          req,
-          res,
-          (w, m) => {
-            const settings = settingsOf(w);
-            const before = resolveModel(w, info.slot).model ?? "none";
-            if (model) settings.models[info.slot] = model;
-            else delete settings.models[info.slot];
-            const after = resolveModel(w, info.slot).model ?? "none";
-            audit(
-              w,
-              m.userId,
-              `Research model changed for ${info.label}: ${before} → ${after}${model ? " (verified with a live request)" : " (environment default)"}`,
-              info.slot,
-            );
-            return settingsView(w);
-          },
-          true,
-        ),
-      );
-    }),
-  );
-  app.put(
-    "/api/research-settings/prompt",
-    handler(async (req, res) => {
-      const data = z
-        .object({
-          instructions: z.string().max(20000).optional(),
-          reset: z.boolean().optional(),
-          version: z.number().int().nonnegative(),
-        })
-        .parse(req.body);
-      const instructions = data.reset
-        ? DEFAULT_INSTRUCTIONS
-        : (data.instructions ?? "").replace(/\r\n/g, "\n").trim();
-      if (!instructions)
-        throw new HttpError(422, "The research instructions cannot be empty.");
-      res.json(
-        await mutate(
-          req,
-          res,
-          (w, m) => {
-            const current = promptSettings(w);
-            if (current.version !== data.version)
-              throw new HttpError(
-                409,
-                "The research prompt changed since you opened it. Reload and review the current version before saving.",
-              );
-            if (instructions === current.instructions)
-              throw new HttpError(422, "Nothing changed in the instructions.");
-            settingsOf(w).prompt = {
-              instructions,
-              version: current.version + 1,
-              updatedAt: now(),
-              updatedBy: m.userId,
-            };
-            audit(
-              w,
-              m.userId,
-              data.reset
-                ? `Research prompt reset to the built-in default (version ${current.version + 1})`
-                : `Research prompt updated (version ${current.version + 1})`,
-              "research-prompt",
-            );
-            return settingsView(w);
           },
           true,
         ),

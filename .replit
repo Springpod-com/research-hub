@@ -28,10 +28,7 @@ packages = ["clamav"]
 
 [userenv.shared]
 DATABASE_CONFIRMED_STANDALONE = "true"
-ECONOMY_MODEL = "gemini-3-flash-preview"
-MAX_CLAUDE_MODEL = "claude-opus-5"
-MAX_OPENAI_MODEL = "gpt-5.6-terra"
-POWER_MODEL = "claude-sonnet-5"
+RESEARCH_MODEL = "claude-sonnet-5"
 BOOTSTRAP_ADMIN_EMAILS = "oliver.fisher@springpod.com"
 
 [userenv.production]

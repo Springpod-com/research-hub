@@ -11,49 +11,16 @@ import { api } from "../api";
 import * as U from "../ui";
 import { useFormCloseGuard } from "./form-close-guard";
 import { sectionSelectionReason } from "./folder-workflow";
-import {
-  TIER_NAME,
-  duration,
-  isActive,
-  typicalDuration,
-  type Tier,
-} from "./research-runs";
+import { duration, isActive, typicalDuration } from "./research-runs";
 
-const TIERS: { id: Tier; description: string }[] = [
-  {
-    id: "economy",
-    description:
-      "One Gemini analysis. The quickest and lowest-cost pass over the sources; good for a first look.",
-  },
-  {
-    id: "power",
-    description:
-      "One Claude analysis with deeper synthesis. The usual choice for a role.",
-  },
-  {
-    id: "max",
-    description:
-      "Two independent analyses of the same sources (Claude and OpenAI) so facts can be cross-checked. The slowest and most expensive.",
-  },
-];
-const REMEMBERED = "organisation-research.tier";
 const ORG_SCOPE = "organisation";
-
-export function rememberedTier(): Tier | undefined {
-  try {
-    const v = localStorage.getItem(REMEMBERED);
-    return v && v in TIER_NAME ? (v as Tier) : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 export function ResearchDialog({
   org,
   roles,
   jobs,
   sources,
-  tiers,
+  ready,
   initialRoleId,
   initialSection,
   initialSourceIds,
@@ -65,26 +32,19 @@ export function ResearchDialog({
   jobs: ResearchJob[];
   /** The organisation's readable sources (text captured, no error). */
   sources: Pick<Source, "id" | "roleIds" | "title" | "folder" | "retrievedAt">[];
-  tiers: Record<string, boolean>;
+  /** The server has a research model and provider access. */
+  ready: boolean;
   initialRoleId?: string;
   initialSection?: Section;
   initialSourceIds?: string[];
   onClose: () => void;
   onStart: (
-    tier: Tier,
     roleId: string | undefined,
     sections?: Section[],
     sourceIds?: string[],
     crawl?: boolean,
   ) => Promise<void>;
 }) {
-  const [tier, setTier] = useState<Tier>(() => {
-    const remembered = rememberedTier();
-    if (remembered && tiers[remembered]) return remembered;
-    return (
-      (["power", "economy", "max"] as Tier[]).find((t) => tiers[t]) || "power"
-    );
-  });
   const [scope, setScope] = useState(initialRoleId || ORG_SCOPE);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -92,10 +52,12 @@ export function ResearchDialog({
   const [sectionData, setSectionData] = useState<SectionsResponse>();
   const [chosenSections, setChosenSections] = useState<Section[]>([]);
   const [sourceIds, setSourceIds] = useState<string[]>([]);
+  // Picked by hand: the run then reads exactly these in one analysis.
+  // Otherwise each chosen section is researched separately (plan P1.5).
+  const [sourcesPicked, setSourcesPicked] = useState(!!initialSourceIds);
   const [crawl, setCrawl] = useState(false);
-  const [initial] = useState({ tier, scope });
+  const [initial] = useState({ scope });
   const dirty =
-    tier !== initial.tier ||
     scope !== initial.scope ||
     !!chosenSections.length ||
     !!sourceIds.length ||
@@ -123,11 +85,7 @@ export function ResearchDialog({
               )
               .map((section) => section.section)
           : result.sections
-              .filter(
-                (section) =>
-                  section.gaps.length &&
-                  !sectionSelectionReason(section, roleId),
-              )
+              .filter((section) => !sectionSelectionReason(section, roleId))
               .map((section) => section.section);
         setChosenSections(defaults);
       })
@@ -187,7 +145,7 @@ export function ResearchDialog({
       !source.roleIds.length || !roleId || source.roleIds.includes(roleId),
   ).length;
   const nothingToRead = sourceIds.length === 0 && (!crawl || !org.website);
-  const configured = TIERS.some((t) => tiers[t.id]);
+  const typical = typicalDuration(jobs);
   return (
     <U.Dialog
       open
@@ -316,10 +274,10 @@ export function ResearchDialog({
               Sources to read ({sourceIds.length}/16)
             </legend>
             <p className="text-p5 text-muted-foreground">
-              Sources from the chosen folders and The organisation are selected
-              automatically, up to 16. For a single folder, its own sources come
-              first, followed by organisation context. Untick any the run should
-              not read.
+              Each chosen section is researched separately and at the same
+              time, reading its own sources first and then organisation
+              context. Untick a source to choose exactly what one combined
+              analysis reads instead (up to 16).
             </p>
             <div className="max-h-48 overflow-y-auto space-y-2 rounded-xl border border-border p-3">
               {eligibleSources.map((source) => (
@@ -329,13 +287,14 @@ export function ResearchDialog({
                     disabled={
                       !sourceIds.includes(source.id) && sourceIds.length >= 16
                     }
-                    onCheckedChange={(checked) =>
+                    onCheckedChange={(checked) => {
+                      setSourcesPicked(true);
                       setSourceIds((current) =>
                         checked
                           ? [...current, source.id].slice(0, 16)
                           : current.filter((id) => id !== source.id),
-                      )
-                    }
+                      );
+                    }}
                   />
                   {source.title}
                 </label>
@@ -347,70 +306,21 @@ export function ResearchDialog({
               )}
             </div>
           </fieldset>
-          <fieldset className="space-y-2">
-            <legend className="text-p4 font-medium">Research tier</legend>
-            <U.RadioGroup
-              value={tier}
-              onValueChange={(v) => {
-                setTier(v as Tier);
-                setError("");
-              }}
-              className="gap-3"
-            >
-              {TIERS.map((t) => {
-                const ready = !!tiers[t.id];
-                const typical = typicalDuration(jobs, t.id);
-                return (
-                  <label
-                    key={t.id}
-                    htmlFor={`tier-${t.id}`}
-                    className={U.cn(
-                      "flex gap-3 rounded-xl border border-border p-4",
-                      ready ? "cursor-pointer" : "opacity-60",
-                      tier === t.id &&
-                        "border-brand-teal-800 bg-brand-teal-100",
-                    )}
-                  >
-                    <U.RadioGroupItem
-                      id={`tier-${t.id}`}
-                      value={t.id}
-                      disabled={!ready}
-                      className="mt-1 shrink-0"
-                    />
-                    <span className="min-w-0 flex-1 space-y-1">
-                      <span className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="text-p3 font-medium">
-                          {TIER_NAME[t.id]}
-                        </span>
-                        {!ready ? (
-                          <U.Badge variant="outline">Needs setup</U.Badge>
-                        ) : typical ? (
-                          <span className="text-p5 text-muted-foreground">
-                            Recent runs took about {duration(typical)}
-                          </span>
-                        ) : (
-                          <span className="text-p5 text-muted-foreground">
-                            No completed runs yet
-                          </span>
-                        )}
-                      </span>
-                      <span className="block text-p5 text-muted-foreground">
-                        {t.description}
-                      </span>
-                    </span>
-                  </label>
-                );
-              })}
-            </U.RadioGroup>
-            {!configured && (
-              <U.Alert>
-                <U.AlertDescription>
-                  No research tier is set up yet. An administrator can connect
-                  the models under Team &amp; settings.
-                </U.AlertDescription>
-              </U.Alert>
-            )}
-          </fieldset>
+          {ready ? (
+            <p className="text-p5 text-muted-foreground">
+              {typical
+                ? `Recent runs took about ${duration(typical)}.`
+                : "No completed runs yet."}
+            </p>
+          ) : (
+            <U.Alert>
+              <U.AlertDescription>
+                Research is not set up on this server yet. Whoever deploys it
+                needs to set the research model (RESEARCH_MODEL) and connect its
+                provider.
+              </U.AlertDescription>
+            </U.Alert>
+          )}
           {running && (
             <U.Alert>
               <U.AlertTitle>Already running</U.AlertTitle>
@@ -452,7 +362,7 @@ export function ResearchDialog({
           <U.Button
             disabled={
               busy ||
-              !tiers[tier] ||
+              !ready ||
               !!running ||
               nothingToRead ||
               !sectionData ||
@@ -475,17 +385,11 @@ export function ResearchDialog({
                     sectionSelectionReason(invalidSection, roleId),
                   );
                 await onStart(
-                  tier,
                   roleId,
                   chosenSections.length ? chosenSections : undefined,
-                  sourceIds.length ? sourceIds : undefined,
+                  sourcesPicked && sourceIds.length ? sourceIds : undefined,
                   crawl,
                 );
-                try {
-                  localStorage.setItem(REMEMBERED, tier);
-                } catch {
-                  // Private browsing can refuse storage; the choice is just not remembered.
-                }
                 onClose();
               } catch (e) {
                 setError((e as Error).message);
