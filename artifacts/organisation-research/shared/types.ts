@@ -64,6 +64,9 @@ export const slots = [
   { slot: "role.entry-routes", section: "role", label: "Routes into the role", table: false },
   { slot: "role.progression", section: "role", label: "Where the role leads", table: false },
   { slot: "role.rewards", section: "role", label: "What people value about the work", table: false },
+  // Entry routes and programmes only, e.g. a degree apprenticeship (Ollie, 28 Oct 2026).
+  { slot: "role.structure", section: "role", label: "How the programme runs", table: false, programme: true },
+  { slot: "role.placements", section: "role", label: "Roles and placements on the programme", table: false, programme: true },
   { slot: "case.routine", section: "case", label: "The routine", table: false },
   { slot: "case.measurement", section: "case", label: "Measurements and limits", table: true },
   { slot: "case.equipment", section: "case", label: "Equipment", table: false },
@@ -83,8 +86,21 @@ export const slots = [
   { slot: "supplied.interview", section: "supplied", label: "The interview", table: true },
   { slot: "supplied.may-use", section: "supplied", label: "Names we may use", table: false },
   { slot: "supplied.must-not-say", section: "supplied", label: "Things we must not say", table: false },
-] as const satisfies readonly { slot: string; section: Section; label: string; table: boolean }[];
+] as const satisfies readonly { slot: string; section: Section; label: string; table: boolean; programme?: true }[];
 export type Slot = (typeof slots)[number]["slot"] | "none";
+/**
+ * A role is a job or an entry route or programme (a degree apprenticeship, a
+ * graduate scheme) that moves learners through several placements. Absent
+ * means a job (every role saved before 28 Oct 2026).
+ */
+export type RoleKind = "job" | "programme";
+export const roleKindNames: Record<RoleKind, string> = {
+  job: "Job role",
+  programme: "Entry route or programme",
+};
+/** The places that apply to a role of this kind; programme places only for programmes. */
+export const slotsFor = (kind: RoleKind | undefined) =>
+  slots.filter((slot) => !("programme" in slot) || kind === "programme");
 export const sectionOfSlot = (slot: Slot | undefined): Section | undefined =>
   slots.find((s) => s.slot === slot)?.section;
 /** Chapter parts a fact feeds. */
@@ -310,6 +326,10 @@ export interface Role extends Base {
   seniority: string;
   responsibilities: string;
   boundaries: string;
+  /** Job or programme; absent means a job. */
+  kind?: RoleKind;
+  /** Programmes: the roles or placements a learner moves through, in order. */
+  placements?: string[];
   occupations: Occupation[];
   /**
    * Retired 28 Oct 2026 (plan P1.3): role review states and the ready

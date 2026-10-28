@@ -314,14 +314,19 @@ function explain(
  * proposed; a researcher's recorded match for a scheme is never replaced.
  */
 export async function automaticOccupations(
-  role: Pick<Role, "title" | "responsibilities" | "seniority" | "occupations">,
+  role: Pick<Role, "title" | "responsibilities" | "seniority" | "occupations" | "placements">,
 ): Promise<Occupation[]> {
   const out: Occupation[] = [];
   for (const scheme of schemes) {
     if (role.occupations.some((o) => o.scheme === scheme)) continue;
     const [best] = await search(
       scheme,
-      { title: role.title, context: role.responsibilities, seniority: role.seniority },
+      // A programme's placements say what the work is better than its name does.
+      {
+        title: role.title,
+        context: [role.responsibilities, ...(role.placements || [])].join("\n"),
+        seniority: role.seniority,
+      },
       1,
     );
     if (!best) continue;

@@ -20,8 +20,10 @@ import type {
   SectionStatus,
 } from "../shared/types.js";
 import {
+  roleKindNames,
   sections,
   slots,
+  slotsFor,
   slotFields,
   tierNames,
 } from "../shared/types.js";
@@ -92,6 +94,8 @@ export const orgPatchInput = orgInput.extend({
   mustNotSay: z.array(attributedInput).max(100).nullable().optional(),
 });
 export const roleInput = z.object({
+  kind: z.enum(["job", "programme"]).optional(),
+  placements: z.array(text.max(150)).max(20).optional(),
   title: text.max(150),
   location: optionalText,
   seniority: optionalText,
@@ -564,7 +568,7 @@ export function sectionsView(
       (!roleId || !f.roleId || f.roleId === roleId),
   );
   const result = sections.map((section) => {
-    const sectionSlots = slots
+    const sectionSlots = slotsFor(role?.kind)
       .filter((slot) => slot.section === section.section)
       .map((slot) => {
         const findingIds = relevantFindings
@@ -883,7 +887,7 @@ export function makePack(
           ),
         }
       : {}),
-    slots: slots.filter((slot) => slot.section === section.section).map((slot) => ({
+    slots: slotsFor(role.kind).filter((slot) => slot.section === section.section).map((slot) => ({
       slot: slot.slot,
       label: slot.label,
       findingIds: findings.filter((finding) => finding.slot === slot.slot).map((finding) => finding.id),
@@ -1110,6 +1114,10 @@ function packMarkdownV2(p: PackV2): string {
   ];
   p.sections.forEach((section, index) => {
     out.push(`## ${index + 1}. ${section.title}`);
+    if (section.section === "role" && p.role.kind === "programme")
+      out.push(
+        `**${roleKindNames.programme}.** Placements: ${p.role.placements?.length ? p.role.placements.join("; ") : "not yet recorded"}.`,
+      );
     if (section.note)
       out.push(
         "### Designer's note",

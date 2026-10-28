@@ -29,6 +29,7 @@ import {
   labels as sharedLabels,
   sectionOfSlot,
   sections as sharedSections,
+  roleKindNames,
   slots,
   tierNames,
 } from "../shared/types";
@@ -833,17 +834,40 @@ export function App({
   // Adding a role asks only for the essentials; seniority and decision-making
   // boundaries are captured later through "Edit role".
   const roleFields = (r?: Role): Field[] => [
-    { name: "title", label: "Job title", value: r?.title, required: true },
+    {
+      name: "kind",
+      label: "What is this?",
+      value: r?.kind || "job",
+      kind: "select",
+      options: [
+        ["job", roleKindNames.job],
+        ["programme", `${roleKindNames.programme}, e.g. a degree apprenticeship`],
+      ],
+    },
+    {
+      name: "title",
+      label: "Job title or programme name, as the organisation writes it",
+      value: r?.title,
+      required: true,
+    },
     { name: "location", label: "Workplace or location", value: r?.location },
     ...(r
       ? [{ name: "seniority", label: "Seniority", value: r.seniority }]
       : []),
     {
       name: "responsibilities",
-      label: "Responsibilities",
+      label: "Responsibilities, or what the programme involves",
       value: r?.responsibilities,
       kind: "textarea",
       required: true,
+      hint: "Pasting the job advert or programme page is fine.",
+    },
+    {
+      name: "placements",
+      label: "Placements on the programme (programmes only)",
+      value: (r?.placements || []).join("\n"),
+      kind: "textarea",
+      hint: "One role or placement per line, in the order learners move through them.",
     },
     ...(r
       ? ([
@@ -945,7 +969,16 @@ export function App({
             // Apprenticeship standard, careers profile, professional body and
             // interview were retired from the form on 28 Oct 2026 (plan P1.6);
             // leaving them out of the save keeps any stored values.
-            const roleValues = v;
+            const roleValues = {
+              ...v,
+              placements:
+                v.kind === "programme"
+                  ? (v.placements || "")
+                      .split("\n")
+                      .map((line) => line.trim())
+                      .filter(Boolean)
+                  : [],
+            };
             return save(
               () =>
                 m
@@ -2052,6 +2085,9 @@ export function App({
                 <U.CardContent className="p-5 space-y-3">
                   <U.IconWork size={24} />
                   <h3 className="text-h6">{r.title}</h3>
+                  {r.kind === "programme" && (
+                    <U.Badge variant="info">{roleKindNames.programme}</U.Badge>
+                  )}
                   <p className="text-p4 text-muted-foreground line-clamp-2">
                     {r.responsibilities}
                   </p>
@@ -2622,8 +2658,21 @@ export function App({
                 </div>
               </U.CardHeader>
               <U.CardContent className="space-y-5">
+                {r.kind === "programme" && (
+                  <div>
+                    <U.Badge variant="info">{roleKindNames.programme}</U.Badge>
+                    <p className="text-label-3 mt-3 mb-2">Placements</p>
+                    <p className="text-p3">
+                      {r.placements?.length
+                        ? r.placements.join(" · ")
+                        : "Not yet recorded."}
+                    </p>
+                  </div>
+                )}
                 <div>
-                  <p className="text-label-3 mb-2">Responsibilities</p>
+                  <p className="text-label-3 mb-2">
+                    {r.kind === "programme" ? "What the programme involves" : "Responsibilities"}
+                  </p>
                   <p className="text-p3 whitespace-pre-wrap">
                     {r.responsibilities}
                   </p>
