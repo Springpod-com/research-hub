@@ -75,20 +75,6 @@ const output = z.object({
     )
     .max(10)
     .default([]),
-  activities: z
-    .array(
-      z.object({
-        title: z.string().max(150),
-        action: z.string().max(2000),
-        output: z.string().max(2000),
-        materials: z.string().max(2000),
-        learning: z.string().max(2000),
-        confirmation: z.string().max(2000),
-        findingIndexes: z.array(z.number().int().nonnegative()),
-      }),
-    )
-    .max(8)
-    .default([]),
 });
 const OWN_KEY: Record<ProviderKind, string> = {
   gemini: "GOOGLE_API_KEY",
@@ -293,18 +279,11 @@ export const DEFAULT_INSTRUCTIONS = [
   "Conflicting evidence must be flagged in rationale and questions, never silently resolved.",
   "Place each fact in the most specific slot from the supplied vocabulary, or use none when it belongs only in the fact register.",
   "Use parts only to mark which of day, workflow, matters and call the fact can support. Do not assign a tier; the server derives it.",
-  "Do not propose activities: return an empty activities array.",
   "Do not score learners.",
 ].join("\n");
-/**
- * Activity candidates are parked: the prompt asks for none, the interface no
- * longer shows them, and anything a model still returns is discarded rather
- * than stored where nobody can review it. Flip this to bring them back.
- */
-export const ACTIVITIES_PARKED = true;
 /** Fixed: the JSON shape the worker parses. Shown read-only in the settings page. */
 export const OUTPUT_CONTRACT =
-  'Return ONLY valid JSON in this shape: {"findings":[{"claim":"...","kind":"company|occupation|proposal","citations":[{"sourceId":"...","quote":"exact words","locator":"page or section"}],"rationale":"scope or uncertainty","slot":"a supplied slot id|none","parts":["day|workflow|matters|call"],"fields":{"the":"table slot columns"}}],"questions":[{"text":"...","why":"...","blocking":false}],"activities":[]}. For every table slot return fields using exactly its listed column keys and string arrays for list columns. Never return a tier.';
+  'Return ONLY valid JSON in this shape: {"findings":[{"claim":"...","kind":"company|occupation|proposal","citations":[{"sourceId":"...","quote":"exact words","locator":"page or section"}],"rationale":"scope or uncertainty","slot":"a supplied slot id|none","parts":["day|workflow|matters|call"],"fields":{"the":"table slot columns"}}],"questions":[{"text":"...","why":"...","blocking":false}]}. For every table slot return fields using exactly its listed column keys and string arrays for list columns. Never return a tier.';
 /** Fixed: what the worker appends after the contract, described for the settings page. */
 export const CONTEXT_NOTE =
   "Organisation brief (the organisation record), role brief (the role record or null), Places to fill, the complete slot vocabulary including the column keys for every table slot, and up to sixteen selected readable sources for the organisation, each with its id, title, kind, URL, locator, verification and up to 18,000 characters of text, between SOURCES BEGIN and SOURCES END.";
@@ -479,7 +458,6 @@ export async function processJob(store: Store, id: string) {
           await store.transact((state) => {
             const j = get(state.jobs, id);
             if (j.status === "cancelled") return;
-            const findingIds: string[] = [];
             const quotationIndexes = new Map<string, QuotationIndex>();
             let accepted = 0;
             let flagged = 0;
@@ -565,7 +543,6 @@ export async function processJob(store: Store, id: string) {
                     previous.fields = undefined;
                   }
                   previous.runIds = [...new Set([...previous.runIds, runId])];
-                  findingIds.push(previous.id);
                 } else {
                   const item = {
                     ...base(),
@@ -580,14 +557,12 @@ export async function processJob(store: Store, id: string) {
                     history: [],
                   };
                   state.findings.push(item);
-                  findingIds.push(item.id);
                 }
                 accepted++;
                 if ((f.citations as Citation[]).some((citation) => citation.unmatched)) flagged++;
               } catch {
-                findingIds.push("");
                 j.errors.push(
-                  "A generated fact was excluded because its quotation or evidence category could not be verified.",
+                  "A generated fact was excluded because its source could not be used or it cited a profession source for an organisation fact.",
                 );
               }
             }
@@ -616,21 +591,6 @@ export async function processJob(store: Store, id: string) {
                   runIds: [runId],
                 });
             }
-            if (role && !ACTIVITIES_PARKED)
-              for (const a of result.data.activities) {
-                const { findingIndexes, ...rest } = a;
-                state.activities.push({
-                  ...base(),
-                  orgId: org.id,
-                  roleId: role.id,
-                  ...rest,
-                  findingIds: findingIndexes
-                    .map((i) => findingIds[i])
-                    .filter(Boolean),
-                  review: "unreviewed",
-                  runIds: [runId],
-                });
-              }
             const run = j.runs.find((r) => r.id === runId)!;
             Object.assign(run, {
               status: "completed",

@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type {
   Workspace,
@@ -11,7 +11,6 @@ import type {
   Organisation,
   Role,
   Occupation,
-  ReviewState,
   Tier,
   Folder,
   PackV2,
@@ -150,16 +149,6 @@ export const questionInput = z.object({
   roleId: z.string().uuid().optional(),
   blocking: z.boolean().default(false),
   assignee: optionalText,
-});
-export const activityInput = z.object({
-  roleId: z.string().uuid(),
-  title: text.max(150),
-  action: text,
-  output: text,
-  materials: text,
-  learning: text,
-  confirmation: optionalText,
-  findingIds: z.array(z.string().uuid()).max(30).default([]),
 });
 export const occupationInput = z
   .object({
@@ -433,16 +422,6 @@ export function validateRoleReferences(
       throw new HttpError(422, "Interview recordings and transcripts must belong to this organisation.");
   }
 }
-/**
- * A finding whose cited web page was refreshed and whose exact quotation no
- * longer appears in the new capture must be looked at again. Reviewing the
- * finding after the change (accept, exclude or clarify) clears the flag.
- */
-export function needsRecheck(f: Finding): boolean {
-  return (f.sourceChanges || []).some(
-    (c) => !c.quoteFound && (!f.reviewedAt || f.reviewedAt < c.at),
-  );
-}
 export function readiness(w: Workspace, orgId: string, roleId: string) {
   roleInOrg(w, orgId, roleId);
   const role = get(w.roles, roleId);
@@ -488,33 +467,12 @@ export function readiness(w: Workspace, orgId: string, roleId: string) {
     )
   )
     issues.push("Wait for research to finish or cancel the run.");
-  // Activity candidates are parked for now: they are kept in the data model
-  // and in packs, but they neither gate readiness nor appear in the workspace.
-  // An accepted activity that references evidence not accepted here still
-  // blocks, so no pack can carry an activity its own findings do not support.
-  for (const activity of w.activities.filter(
-    (a) => a.roleId === roleId && a.review === "accepted",
-  )) {
-    if (
-      activity.findingIds.some(
-        (id) => !relevant.some((f) => f.id === id && f.review === "accepted"),
-      )
-    ) {
-      issues.push(
-        "Accepted activities must reference facts accepted in this pack.",
-      );
-    }
-  }
   for (const f of relevant.filter((f) => f.review === "accepted"))
     try {
       validateCitations(w.sources, orgId, f.kind, f.citations);
     } catch {
       issues.push("Repair the evidence references for an accepted fact.");
     }
-  if (relevant.some((f) => f.review !== "rejected" && needsRecheck(f)))
-    issues.push(
-      "Re-review facts whose source page changed since the quotation was captured.",
-    );
   const mediaFacts = relevant.filter(
     (f) => f.review === "accepted" && f.slot === "media.item",
   );
@@ -579,167 +537,6 @@ export function readiness(w: Workspace, orgId: string, roleId: string) {
   )
     issues.push("Name the organisation's fact checker or record them as not yet known.");
   return [...new Set(issues)];
-}
-/**
- * Stable digest of everything a reviewer signed off when marking a role
- * profile ready. Any later change to this content returns the profile to
- * draft, so a "ready" snapshot can only be created from reviewed content.
- */
-export function roleFingerprint(w: Workspace, role: Role): string {
-  const org = w.organisations.find((o) => o.id === role.orgId);
-  const pick = <T extends object>(o: T, keys: (keyof T)[]) =>
-    Object.fromEntries(keys.map((k) => [k, o[k]]));
-  const orgKeys: (keyof Organisation)[] = [
-    "name",
-    "website",
-    "country",
-    "division",
-    "summary",
-    "brandNotes",
-    "logoSourceId",
-    "factChecker",
-    "brand",
-    "mayUse",
-    "mustNotSay",
-  ];
-  const findings = w.findings.filter(
-    (f) => f.orgId === role.orgId && (!f.roleId || f.roleId === role.id),
-  );
-  const citedIds = new Set(
-    findings.flatMap((f) => f.citations.map((c) => c.sourceId)),
-  );
-  const content = {
-    role: pick(role, [
-      "title",
-      "location",
-      "seniority",
-      "responsibilities",
-      "boundaries",
-      "occupations",
-      "standard",
-      "ncsUrl",
-      "professionalBody",
-      "interview",
-    ]),
-    organisation: org ? pick(org, orgKeys) : null,
-    sectionNotes: Object.fromEntries(
-      sections.map((section) => [
-        section.section,
-        (section.roleScoped
-          ? role.sectionNotes?.[section.section]
-          : org?.sectionNotes?.[section.section]
-        )?.text || "",
-      ]),
-    ),
-    findings: findings.map((f) => ({
-      ...pick(f, [
-        "id",
-        "kind",
-        "claim",
-        "citations",
-        "review",
-        "rationale",
-        "slot",
-        "parts",
-        "fields",
-        "verified",
-      ]),
-      recheck: needsRecheck(f),
-    })),
-    // The source register a pack would snapshot, keyed by content rather than
-    // id or capture time so an unchanged refresh does not disturb readiness.
-    sources: [
-      ...new Set(
-        w.sources
-          .filter(
-            (s) =>
-              s.orgId === role.orgId &&
-              (citedIds.has(s.id) ||
-                !s.roleIds.length ||
-                s.roleIds.includes(role.id)),
-          )
-          .map((s) =>
-            JSON.stringify(
-              pick(s, [
-                "title",
-                "kind",
-                "url",
-                "text",
-                "locator",
-                "permission",
-                "caption",
-                "roleIds",
-                "verification",
-                "suppliedBy",
-                "publishedAt",
-                "mime",
-                "filename",
-                "error",
-                "folder",
-                "tier",
-                "tierReason",
-                "rights",
-                "transcriptSourceId",
-                "timecode",
-                "providedBy",
-              ]),
-            ),
-          ),
-      ),
-    ].sort(),
-    activities: w.activities
-      .filter((a) => a.roleId === role.id)
-      .map((a) =>
-        pick(a, [
-          "id",
-          "title",
-          "action",
-          "output",
-          "materials",
-          "learning",
-          "confirmation",
-          "findingIds",
-          "review",
-        ]),
-      ),
-    questions: w.questions
-      .filter(
-        (q) => q.orgId === role.orgId && (!q.roleId || q.roleId === role.id),
-      )
-      .map((q) =>
-        pick(q, [
-          "id",
-          "text",
-          "why",
-          "blocking",
-          "status",
-          "answer",
-          "assignee",
-        ]),
-      ),
-    // Research-run errors become pack limitations.
-    jobErrors: w.jobs
-      .filter(
-        (j) => j.orgId === role.orgId && (!j.roleId || j.roleId === role.id),
-      )
-      .flatMap((j) => j.errors)
-      .sort(),
-  };
-  return createHash("sha256").update(JSON.stringify(content)).digest("hex");
-}
-export function reviewStateOf(
-  w: Workspace,
-  role: Role,
-): { state: ReviewState; changed: boolean } {
-  const stored = role.reviewState || "draft";
-  if (stored === "ready" && role.readyFingerprint !== roleFingerprint(w, role))
-    return { state: "draft", changed: true };
-  return { state: stored, changed: false };
-}
-/** Role as returned to clients: effective review state plus change flag. */
-export function roleView(w: Workspace, role: Role): Role {
-  const { state, changed } = reviewStateOf(w, role);
-  return { ...role, reviewState: state, reviewChanged: changed };
 }
 export function sourceView(source: Source): Source {
   const folder: Folder =
@@ -891,33 +688,6 @@ export function sectionsView(
     ),
   };
 }
-export function setReviewState(
-  w: Workspace,
-  role: Role,
-  member: Member,
-  state: ReviewState,
-  note: string,
-) {
-  const current = reviewStateOf(w, role).state;
-  if (state === "ready") {
-    requireRole(member, ["reviewer", "admin"]);
-    const issues = readiness(w, role.orgId, role.id);
-    if (issues.length) throw new HttpError(422, issues.join(" "));
-    role.readyFingerprint = roleFingerprint(w, role);
-  } else {
-    requireRole(member, ["researcher", "reviewer", "admin"]);
-    delete role.readyFingerprint;
-  }
-  if (current === state && role.reviewState === state)
-    throw new HttpError(
-      409,
-      `The role profile is already ${state.replace("-", " ")}.`,
-    );
-  role.reviewState = state;
-  role.reviewStateBy = member.userId;
-  role.reviewStateAt = now();
-  role.reviewStateNote = note;
-}
 /**
  * Existing organisations that may be the one a user is about to create.
  * Compared by website domain and by normalised name (legal suffixes removed),
@@ -1004,41 +774,6 @@ export function suggestOrganisations(
       summary: o.summary.slice(0, 240),
       reasons,
     }));
-}
-/**
- * Sentence-level difference between two captures of the same page. Captured
- * text is whitespace-collapsed, so sentences are the smallest stable unit.
- */
-export function captureDiff(before: string, after: string) {
-  const sentences = (t: string) => {
-    const counts = new Map<string, number>();
-    for (const p of t.split(/\n+|(?<=[.!?])\s+(?=[A-Z0-9“"(])/)) {
-      const v = p.trim();
-      if (v.length > 1) counts.set(v, (counts.get(v) || 0) + 1);
-    }
-    return counts;
-  };
-  const a = sentences(before);
-  const b = sentences(after);
-  // Sentences present more often in x than in y, repeated per extra occurrence.
-  const extra = (x: Map<string, number>, y: Map<string, number>) => {
-    const out: string[] = [];
-    for (const [v, n] of x)
-      for (let i = y.get(v) || 0; i < n && out.length < 40; i++) out.push(v);
-    return out;
-  };
-  return { added: extra(b, a), removed: extra(a, b) };
-}
-/** The capture ids of one web page across refreshes, newest first. */
-export function captureLineage(w: Workspace, source: Source): string[] {
-  const ids: string[] = [];
-  let cur: Source | undefined = source;
-  while (cur && !ids.includes(cur.id)) {
-    ids.push(cur.id);
-    const prev: string | undefined = cur.supersedes;
-    cur = prev ? w.sources.find((s) => s.id === prev) : undefined;
-  }
-  return ids;
 }
 const packBaseSchema = z.object({
   id: z.string().uuid(),
@@ -1177,7 +912,7 @@ export function makePack(
     )
     .map(({ blob, ...rest }) => sourceView(rest));
   const organisation = get(w.organisations, orgId);
-  const recorded = roleView(w, get(w.roles, roleId));
+  const recorded = get(w.roles, roleId);
   const role = {
     ...recorded,
     occupations: [
@@ -1240,11 +975,9 @@ export function makePack(
     role,
     findings,
     sources,
-    activities: w.activities.filter(
-      (a) =>
-        a.roleId === roleId &&
-        a.review === "accepted",
-    ),
+    // Activity candidates were retired on 28 Oct 2026 (plan P1.3); the key
+    // stays empty so the pack shape is unchanged for anything reading it.
+    activities: [],
     questions: w.questions.filter(
       (q) => q.orgId === orgId && (!q.roleId || q.roleId === roleId),
     ),
@@ -1319,7 +1052,7 @@ export function packMarkdown(p: Pack): string {
           `Source ${c.sourceId} — ${c.locator}\n\n> ${c.quote.replace(/\n/g, "\n> ")}`,
       ),
     );
-  out.push("## Candidate activities — proposals");
+  if (p.activities.length) out.push("## Candidate activities — proposals");
   for (const a of p.activities)
     out.push(
       `### ${heading(a.title)} · ${a.id}\n\nAction: ${a.action}\n\nOutput: ${a.output}\n\nMaterials: ${a.materials}\n\nLearning: ${a.learning}\n\nOrganisation confirmation: ${a.confirmation || "Required during storyboard review"}\n\nFact references: ${a.findingIds.join(", ")}\n\nReview: ${a.review}`,

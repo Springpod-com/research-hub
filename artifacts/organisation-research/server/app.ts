@@ -25,7 +25,6 @@ import {
   findingInput,
   citation,
   questionInput,
-  activityInput,
   occupationInput,
   optionalText,
   review,
@@ -34,10 +33,7 @@ import {
   readiness,
   makePack,
   packMarkdown,
-  roleView,
   suggestOrganisations,
-  captureDiff,
-  captureLineage,
   hydrateDatasetMatch,
   sourceView,
   findingView,
@@ -499,7 +495,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
       const w = await store.read();
       res.json({
         ...w,
-        roles: w.roles.map((r) => roleView(w, r)),
+        roles: w.roles,
         sources: w.sources.map(({ blob, ...s }) => sourceView(s)),
         findings: w.findings.map((f) => findingView(w, f)),
         members:
@@ -712,12 +708,6 @@ export function createApp(store: Store, options: AppOptions = {}) {
           return { id: role.id, deleted, sourcesUnlinked };
         }),
       );
-    }),
-  );
-  app.post(
-    "/api/roles/:id/review-state",
-    handler(async () => {
-      throw new HttpError(422, "Role approval states are no longer used.");
     }),
   );
   // Official occupational reference data (bundled UK SOC 2020 and O*NET).
@@ -975,106 +965,6 @@ export function createApp(store: Store, options: AppOptions = {}) {
           w.sources.push(source);
           audit(w, m.userId, "Public page captured", source.id);
           return sourceView(source);
-        }),
-      );
-    }),
-  );
-  app.post(
-    "/api/sources/:id/refresh",
-    handler(async (req, res) => {
-      const current = get((await store.read()).sources, String(req.params.id));
-      if (current.kind !== "web" || !current.url)
-        throw new HttpError(422, "Only captured web pages can be refreshed.");
-      if (current.supersededBy)
-        throw new HttpError(
-          409,
-          "This capture was already refreshed. Refresh the latest capture instead.",
-        );
-      const page = await fetchPublic(current.url);
-      const p = extractPage(page.html, page.url);
-      res.status(201).json(
-        await mutate(req, res, (w, m) => {
-          const previous = get(w.sources, current.id);
-          if (previous.supersededBy)
-            throw new HttpError(409, "This capture was already refreshed.");
-          const source: Source = {
-            ...base(),
-            orgId: previous.orgId,
-            roleIds: [...previous.roleIds],
-            title: p.title,
-            text: p.text,
-            url: page.url,
-            kind: "web",
-            permission: previous.permission,
-            suppliedBy: "Public website",
-            verification: "public-source",
-            publishedAt: "",
-            retrievedAt: now(),
-            locator: "Captured page excerpt",
-            runIds: [],
-            supersedes: previous.id,
-            folder: previous.folder,
-            tier: previous.tier,
-            tierReason: previous.tierReason,
-            rights: previous.rights,
-            transcriptSourceId: previous.transcriptSourceId,
-            timecode: previous.timecode,
-            providedBy: previous.providedBy
-              ? { ...previous.providedBy }
-              : undefined,
-          };
-          // Findings cite whichever capture of this page they were made
-          // against, so every earlier capture in the lineage is checked.
-          const lineage = new Set(captureLineage(w, previous));
-          previous.supersededBy = source.id;
-          previous.version++;
-          previous.updatedAt = now();
-          w.sources.push(source);
-          const at = source.retrievedAt;
-          const affected: string[] = [];
-          const refreshedQuotationIndex = buildQuotationIndex(p.text);
-          const previousQuotationIndex = buildQuotationIndex(previous.text);
-          for (const f of w.findings) {
-            const cited = f.citations.filter((c) => lineage.has(c.sourceId));
-            if (!cited.length) continue;
-            const quoteFound = cited.every(
-              (c) => locateQuotation(refreshedQuotationIndex, c.quote) !== null,
-            );
-            // Each quotation is judged on its own: one that was still in the
-            // last capture and is gone now is a new disappearance, however
-            // many others were already missing (and flagged) before.
-            const newlyMissing = cited.some(
-              (c) =>
-                locateQuotation(previousQuotationIndex, c.quote) !== null &&
-                locateQuotation(refreshedQuotationIndex, c.quote) === null,
-            );
-            if (!quoteFound && !newlyMissing) continue;
-            f.sourceChanges = [
-              ...(f.sourceChanges || []),
-              { at, sourceId: previous.id, newSourceId: source.id, quoteFound },
-            ];
-            // Bump so a review panel opened before the refresh cannot save
-            // over the change without seeing it (stale saves get 409).
-            f.version++;
-            f.updatedAt = at;
-            if (!quoteFound) affected.push(f.id);
-          }
-          const changed = previous.text !== p.text;
-          source.captureDiff = {
-            previousId: previous.id,
-            changed,
-            ...captureDiff(previous.text, p.text),
-            affectedFindingIds: affected,
-          };
-          audit(
-            w,
-            m.userId,
-            changed
-              ? `Source refreshed; ${affected.length} fact(s) need re-review`
-              : "Source refreshed; no text change",
-            source.id,
-          );
-          return { source: sourceView(source), ...source.captureDiff };
         }),
       );
     }),
@@ -1994,50 +1884,6 @@ export function createApp(store: Store, options: AppOptions = {}) {
         query.roleId,
       );
       res.json(response);
-    }),
-  );
-  app.post(
-    "/api/organisations/:id/activities",
-    handler(async (req, res) => {
-      const data = activityInput.parse(req.body);
-      res.status(201).json(
-        await mutate(req, res, (w, m) => {
-          const orgId = String(req.params.id);
-          roleInOrg(w, orgId, data.roleId);
-          for (const id of data.findingIds) {
-            const f = get(w.findings, id);
-            if (f.orgId !== orgId || (f.roleId && f.roleId !== data.roleId))
-              throw new HttpError(422, "Fact is outside this role.");
-          }
-          const a = {
-            ...base(),
-            ...data,
-            orgId,
-            review: "unreviewed" as const,
-            runIds: [],
-          };
-          w.activities.push(a);
-          audit(w, m.userId, "Activity proposed", a.id);
-          return a;
-        }),
-      );
-    }),
-  );
-  app.patch(
-    "/api/activities/:id",
-    handler(async (req, res) => {
-      const data = z
-        .object({ review, confirmation: optionalText })
-        .parse(req.body);
-      res.json(
-        await mutate(req, res, (w, m) => {
-          const a = get(w.activities, String(req.params.id));
-          touch(a, req.body.version);
-          Object.assign(a, data);
-          audit(w, m.userId, "Activity reviewed", a.id);
-          return a;
-        }),
-      );
     }),
   );
   app.get(

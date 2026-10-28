@@ -298,15 +298,16 @@ export interface Role extends Base {
   responsibilities: string;
   boundaries: string;
   occupations: Occupation[];
-  /** Pack review state (PRD: draft → in review → ready). Absent = draft. */
+  /**
+   * Retired 28 Oct 2026 (plan P1.3): role review states and the ready
+   * fingerprint. Kept so stored roles and earlier packs still read; nothing
+   * sets or checks them any more.
+   */
   reviewState?: ReviewState;
   reviewStateBy?: string;
   reviewStateAt?: string;
   reviewStateNote?: string;
-  /** Content fingerprint taken when marked ready; edits since revert to draft. */
   readyFingerprint?: string;
-  /** Server-computed: true when content changed after the role was marked ready. */
-  reviewChanged?: boolean;
   /** The profession's own documents (plan §4.6); UK SOC stays the primary classification. */
   standard?: ApprenticeshipStandard;
   ncsUrl?: string;

@@ -208,27 +208,19 @@ describe("Official occupational data", () => {
 });
 
 describe("Simplified pack creation", () => {
-  it("retires role approval states", async () => {
+  it("no longer offers role approval states (retired 28 Oct 2026)", async () => {
     const r = await request(researcher())
       .post(`/api/roles/${role().id}/review-state`)
       .send({ state: "in-review", version: (await currentRole()).version });
-    expect(r.status).toBe(422);
+    expect(r.status).toBe(404);
   });
   it("creates the single pack without marking ready", async () => {
     const f = fixture.findings[0];
-    const a = fixture.activities[0];
     expect(
       (
         await request(app())
           .patch(`/api/findings/${f.id}`)
           .send({ ...f, review: "accepted" })
-      ).status,
-    ).toBe(200);
-    expect(
-      (
-        await request(app())
-          .patch(`/api/activities/${a.id}`)
-          .send({ ...a, review: "accepted" })
       ).status,
     ).toBe(200);
     const pack = await request(app())
@@ -253,320 +245,8 @@ describe("Simplified pack creation", () => {
   });
 });
 
-describe("Source refresh", () => {
-  it("keeps the old capture, links the new one and flags findings whose quote disappeared", async () => {
-    page.current = html(
-      `<p>Our warehouse coordinators now check every inbound delivery against the purchase order and the ASN.</p><p>${secondParagraph}</p><p>New: apprenticeships open in March.</p>`,
-    );
-    const r = await request(app()).post(`/api/sources/${webSource.id}/refresh`);
-    expect(r.status).toBe(201);
-    expect(r.body.changed).toBe(true);
-    expect(r.body.source.supersedes).toBe(webSource.id);
-    expect(r.body.source).toMatchObject({
-      folder: webSource.folder,
-      tier: webSource.tier,
-      tierReason: webSource.tierReason,
-      rights: webSource.rights,
-      transcriptSourceId: webSource.transcriptSourceId,
-      timecode: webSource.timecode,
-      providedBy: webSource.providedBy,
-    });
-    expect(r.body.added).toContain("New: apprenticeships open in March.");
-    expect(r.body.removed).toContain(firstParagraph);
-    const flagged = fixture.findings.find(
-      (f) => f.citations[0]?.sourceId === webSource.id,
-    )!;
-    expect(r.body.affectedFindingIds).toEqual([flagged.id]);
-    const w = (await request(app()).get("/api/workspace")).body;
-    const previous = w.sources.find((s: Source) => s.id === webSource.id);
-    expect(previous.supersededBy).toBe(r.body.source.id);
-    expect(previous.text).toContain(firstParagraph);
-    const finding = w.findings.find((f: { id: string }) => f.id === flagged.id);
-    expect(finding.sourceChanges[0].quoteFound).toBe(false);
-    expect(finding.review).toBe("accepted");
-    const readiness = await request(app()).get(
-      `/api/roles/${role().id}/readiness`,
-    );
-    expect(readiness.body.issues).toContain(
-      "Re-review facts whose source page changed since the quotation was captured.",
-    );
-    // Re-reviewing after the change clears the flag; the old quotation still
-    // matches the immutable earlier capture, so the record stays valid.
-    const rereview = await request(app())
-      .patch(`/api/findings/${flagged.id}`)
-      .send({ ...finding, review: "accepted" });
-    expect(rereview.status).toBe(200);
-    expect(
-      (await request(app()).get(`/api/roles/${role().id}/readiness`)).body
-        .issues,
-    ).not.toContain(
-      "Re-review facts whose source page changed since the quotation was captured.",
-    );
-    expect(
-      (await request(app()).post(`/api/sources/${webSource.id}/refresh`))
-        .status,
-    ).toBe(409);
-    expect(
-      (
-        await request(app()).post(
-          `/api/sources/${fixture.sources[0].id}/refresh`,
-        )
-      ).status,
-    ).toBe(422);
-  });
-  it("reports an unchanged page without flagging findings", async () => {
-    const w = (await request(app()).get("/api/workspace")).body;
-    const latest = w.sources.find((s: Source) => s.supersedes === webSource.id);
-    page.current = html(
-      latest.text
-        .split("\n")
-        .map((p: string) => `<p>${p}</p>`)
-        .join(""),
-    );
-    const r = await request(app()).post(`/api/sources/${latest.id}/refresh`);
-    expect(r.status).toBe(201);
-    expect(r.body.changed).toBe(false);
-    expect(r.body.affectedFindingIds).toEqual([]);
-  });
-});
-
-describe("Refresh integrity", () => {
-  const recheck =
-    "Re-review facts whose source page changed since the quotation was captured.";
-  const latest = async () => {
-    const w = (await request(app()).get("/api/workspace")).body;
-    return w.sources.find((s: Source) => s.kind === "web" && !s.supersededBy);
-  };
-  it("stores the diff on the new capture and rejects stale saves made before the refresh", async () => {
-    const before = (await request(app()).get("/api/workspace")).body;
-    const flagged = before.findings.find(
-      (f: { citations: { sourceId: string }[] }) =>
-        f.citations[0]?.sourceId === webSource.id,
-    );
-    // Second finding cites the original capture with a passage still present.
-    const created = await request(app())
-      .post(`/api/organisations/${fixture.organisations[0].id}/findings`)
-      .send({
-        roleId: role().id,
-        kind: "company",
-        claim: "Shifts run in two blocks.",
-        citations: [
-          {
-            sourceId: webSource.id,
-            quote: secondParagraph,
-            locator: "Paragraph 2",
-          },
-        ],
-        rationale: "",
-      });
-    expect(created.status).toBe(201);
-    const survivor = created.body;
-    const gen2 = await latest();
-    const gen2Previous = before.sources.find(
-      (s: Source) => s.supersededBy === gen2.id,
-    );
-    expect(gen2.captureDiff.previousId).toBe(gen2Previous.id);
-    expect(gen2.captureDiff.changed).toBe(false);
-    // Third capture drops the shift sentence: the survivor is newly affected,
-    // the already-missing first paragraph is not flagged a second time.
-    page.current = html(
-      `<p>Our warehouse coordinators now check every inbound delivery against the purchase order and the ASN.</p><p>New: apprenticeships open in March.</p>`,
-    );
-    const r = await request(app()).post(`/api/sources/${gen2.id}/refresh`);
-    expect(r.status).toBe(201);
-    expect(r.body.affectedFindingIds).toEqual([survivor.id]);
-    expect(r.body.removed).toEqual([secondParagraph]);
-    const after = (await request(app()).get("/api/workspace")).body;
-    const gen3 = after.sources.find((s: Source) => s.id === r.body.source.id);
-    expect(gen3.captureDiff).toEqual({
-      previousId: gen2.id,
-      changed: true,
-      added: [],
-      removed: [secondParagraph],
-      affectedFindingIds: [survivor.id],
-    });
-    const stillFlagged = after.findings.find(
-      (f: { id: string }) => f.id === flagged.id,
-    );
-    expect(stillFlagged.sourceChanges).toHaveLength(1);
-    // A review panel opened before the refresh holds the old version.
-    const stale = await request(app())
-      .patch(`/api/findings/${survivor.id}`)
-      .send({ ...survivor, review: "accepted" });
-    expect(stale.status).toBe(409);
-    expect(
-      (await request(app()).get(`/api/roles/${role().id}/readiness`)).body
-        .issues,
-    ).toContain(recheck);
-    const fresh = after.findings.find(
-      (f: { id: string }) => f.id === survivor.id,
-    );
-    expect(
-      (
-        await request(app())
-          .patch(`/api/findings/${survivor.id}`)
-          .send({ ...fresh, review: "accepted" })
-      ).status,
-    ).toBe(200);
-    expect(
-      (
-        await request(app())
-          .patch(`/api/findings/${flagged.id}`)
-          .send({ ...stillFlagged, review: "accepted" })
-      ).status,
-    ).toBe(200);
-  });
-  it("keeps refresh integrity through an unchanged refresh and source edit", async () => {
-    const gen3 = await latest();
-    page.current = html(
-      gen3.text
-        .split("\n")
-        .map((p: string) => `<p>${p}</p>`)
-        .join(""),
-    );
-    const r = await request(app()).post(`/api/sources/${gen3.id}/refresh`);
-    expect(r.status).toBe(201);
-    expect(r.body.changed).toBe(false);
-    // Superseding bumped the earlier capture's version; a stale edit is 409.
-    expect(
-      (
-        await request(app())
-          .patch(`/api/sources/${gen3.id}`)
-          .send({ ...gen3, caption: "stale" })
-      ).status,
-    ).toBe(409);
-    const edited = await request(app())
-      .patch(`/api/sources/${gen3.id}`)
-      .send({
-        version: gen3.version + 1,
-        roleIds: gen3.roleIds,
-        permission: gen3.permission,
-        caption: "Checked with the client",
-      });
-    expect(edited.status).toBe(200);
-    expect(edited.body.caption).toBe("Checked with the client");
-  });
-});
-
-describe("Refresh transitions", () => {
-  it("flags a finding whose second quotation disappears after its first was already missing", async () => {
-    const w = (await request(app()).get("/api/workspace")).body;
-    const gen2 = w.sources.find((s: Source) => s.supersedes === webSource.id);
-    const latest = w.sources.find(
-      (s: Source) => s.kind === "web" && !s.supersededBy,
-    );
-    const apprenticeships = "New: apprenticeships open in March.";
-    expect(latest.text).not.toContain(firstParagraph);
-    expect(latest.text).toContain(apprenticeships);
-    const created = await request(app())
-      .post(`/api/organisations/${fixture.organisations[0].id}/findings`)
-      .send({
-        roleId: role().id,
-        kind: "company",
-        claim: "Deliveries are checked and apprenticeships open in March.",
-        citations: [
-          { sourceId: webSource.id, quote: firstParagraph, locator: "P1" },
-          { sourceId: gen2.id, quote: apprenticeships, locator: "P3" },
-        ],
-        rationale: "",
-      });
-    expect(created.status).toBe(201);
-    page.current = html(
-      "<p>Our warehouse coordinators now check every inbound delivery against the purchase order and the ASN.</p>",
-    );
-    const r = await request(app()).post(`/api/sources/${latest.id}/refresh`);
-    expect(r.status).toBe(201);
-    expect(r.body.affectedFindingIds).toEqual([created.body.id]);
-    expect(r.body.removed).toEqual([apprenticeships]);
-    expect(
-      (await request(app()).get(`/api/roles/${role().id}/readiness`)).body
-        .issues,
-    ).toContain(
-      "Re-review facts whose source page changed since the quotation was captured.",
-    );
-  });
-  it("does not flag a quotation retained with normalised punctuation and spacing", async () => {
-    const exact = "The “night team” checks\u00a0stock—then records it.";
-    const source: Source = {
-      ...base(),
-      orgId: fixture.organisations[0].id,
-      roleIds: [role().id],
-      title: "Normalised quotation source",
-      kind: "web",
-      url: "https://northstar.example/normalised",
-      text: exact,
-      locator: "Captured page excerpt",
-      permission: "research-only",
-      verification: "public-source",
-      suppliedBy: "Public website",
-      publishedAt: "",
-      retrievedAt: now(),
-      runIds: [],
-    };
-    const finding = {
-      ...base(),
-      orgId: source.orgId,
-      roleId: role().id,
-      kind: "company" as const,
-      claim: "The night team checks stock before recording it.",
-      citations: [{ sourceId: source.id, quote: exact, locator: "Paragraph 1" }],
-      review: "accepted" as const,
-      reviewer: reviewer.userId,
-      reviewedAt: now(),
-      rationale: "",
-      runIds: [],
-      history: [],
-    };
-    await store.transact((workspace) => {
-      workspace.sources.push(source);
-      workspace.findings.push(finding);
-    });
-    page.current = html(
-      '<p>the "night team" checks stock-then records it.</p>',
-    );
-
-    const refreshed = await request(app()).post(
-      `/api/sources/${source.id}/refresh`,
-    );
-    expect(refreshed.status).toBe(201);
-    expect(refreshed.body.affectedFindingIds).not.toContain(finding.id);
-    const workspace = (await request(app()).get("/api/workspace")).body;
-    const stored = workspace.findings.find(
-      (item: { id: string }) => item.id === finding.id,
-    );
-    expect(stored.sourceChanges.at(-1).quoteFound).toBe(true);
-  });
-  it("tracks source provenance changes and research-run errors", async () => {
-    const w = (await request(app()).get("/api/workspace")).body;
-    const flagged = w.findings.find((f: { claim: string }) =>
-      f.claim.startsWith("Deliveries are checked"),
-    );
-    expect(
-      (
-        await request(app())
-          .patch(`/api/findings/${flagged.id}`)
-          .send({ ...flagged, review: "rejected" })
-      ).status,
-    ).toBe(200);
-    // Same text as an existing statement but different provenance: the pack
-    // would contain a new source entry, so the profile returns to draft.
-    const statement = fixture.sources[0];
-    const twin = await request(app())
-      .post(`/api/organisations/${fixture.organisations[0].id}/sources`)
-      .send({
-        title: statement.title,
-        text: statement.text,
-        kind: statement.kind,
-        url: statement.url,
-        roleIds: [role().id],
-        permission: statement.permission,
-        suppliedBy: "A different contact",
-        verification: statement.verification,
-        publishedAt: "2026-01-01",
-        locator: statement.locator,
-      });
-    expect(twin.status).toBe(201);
-    // A finished research run with no errors does not disturb readiness...
+describe("Pack limitations", () => {
+  it("carries research-run errors into the pack", async () => {
     await store.transact((ws) => {
       ws.jobs.push({
         ...base(),
@@ -575,23 +255,21 @@ describe("Refresh transitions", () => {
         tier: "economy",
         status: "completed",
         stage: "done",
-        errors: [],
+        errors: ["Model call failed: simulated"],
         requestedBy: reviewer.userId,
         attempts: 1,
         runs: [],
       });
-    });
-    // ...but an error recorded on it becomes a pack limitation, so it does.
-    await store.transact((ws) => {
-      ws.jobs
-        .find((j) => j.roleId === role().id)!
-        .errors.push("Model call failed: simulated");
     });
     const pack = await request(app())
       .post(`/api/roles/${role().id}/packs`)
       .send({});
     expect(pack.status).toBe(201);
     expect(pack.body.limitations).toContain("Model call failed: simulated");
+  });
+  it("no longer offers source refresh (retired 28 Oct 2026)", async () => {
+    const r = await request(app()).post(`/api/sources/${webSource.id}/refresh`);
+    expect(r.status).toBe(404);
   });
 });
 

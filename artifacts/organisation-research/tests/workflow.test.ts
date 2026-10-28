@@ -15,8 +15,6 @@ import {
   findingView,
   makePack,
   packMarkdown,
-  roleFingerprint,
-  reviewStateOf,
   sectionsView,
   sourceView,
 } from "../server/domain.js";
@@ -266,14 +264,6 @@ describe("Evidence and immutable pack workflow", () => {
           .send({ ...f, review: "accepted" })
       ).status,
     ).toBe(409);
-    const a = fixture.activities[0];
-    expect(
-      (
-        await request(app())
-          .patch(`/api/activities/${a.id}`)
-          .send({ ...a, review: "accepted" })
-      ).status,
-    ).toBe(200);
   });
   it("bulk-reviews facts atomically through the individual review path", async () => {
     const orgId = fixture.organisations[0].id;
@@ -818,43 +808,6 @@ describe("Knowledge-base derived views and packs", () => {
     } = pack;
     const legacy = { ...basePack, schemaVersion: "1.0.0" } as PackV1;
     expect(packMarkdown(legacy)).toContain("Schema 1.0.0");
-  });
-  it("fingerprints every new pack and readiness input", () => {
-    const mutations: ((w: Workspace) => void)[] = [
-      (w) => {
-        w.organisations[0].factChecker = {
-          name: "Pat Jones",
-          jobTitle: "Fact checker",
-        };
-      },
-      (w) => {
-        Object.assign(w.findings[0], {
-          slot: "role.duty",
-          parts: ["day"],
-          fields: { duty: "Check deliveries" },
-          verified: { by: "Pat Jones", at: new Date().toISOString() },
-        });
-      },
-      (w) => {
-        Object.assign(w.sources[0], {
-          folder: "03-case-material",
-          tier: 1,
-          tierReason: "Confirmed",
-          rights: "organisation-supplied",
-          transcriptSourceId: randomUUID(),
-          timecode: "00:01:20",
-          providedBy: { name: "Pat Jones", jobTitle: "Manager" },
-        });
-      },
-    ];
-    for (const mutate of mutations) {
-      const w = sampleWorkspace();
-      const role = w.roles[0];
-      role.reviewState = "ready";
-      role.readyFingerprint = roleFingerprint(w, role);
-      mutate(w);
-      expect(reviewStateOf(w, role)).toEqual({ state: "draft", changed: true });
-    }
   });
 });
 describe("Web capture", () => {

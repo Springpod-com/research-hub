@@ -8,7 +8,6 @@ import {
   base,
   makePack,
   packMarkdown,
-  roleFingerprint,
   sectionsView,
 } from "../server/domain.js";
 import { packDocx, packFolderZip } from "../server/export.js";
@@ -380,17 +379,4 @@ describe("knowledge-base Step 6 designer notes and source trails", () => {
     );
   });
 
-  it("drifts readiness only when note text changes", () => {
-    const workspace = notedWorkspace();
-    const role = workspace.roles[0];
-    const original = roleFingerprint(workspace, role);
-    role.sectionNotes!.role = {
-      ...role.sectionNotes!.role!,
-      by: "Another researcher",
-      at: "2025-06-01T00:00:00.000Z",
-    };
-    expect(roleFingerprint(workspace, role)).toBe(original);
-    role.sectionNotes!.role!.text = "Changed direction";
-    expect(roleFingerprint(workspace, role)).not.toBe(original);
-  });
 });

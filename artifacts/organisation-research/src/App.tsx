@@ -91,7 +91,7 @@ const POLL_IDLE = 12000;
 // Shown wherever a readiness check appears, so the term is explained the
 // same way everywhere.
 const READINESS_HELP =
-  "Readiness means the role's research passes the handover checks: responsibilities are described, evidence is accepted and valid, reviews and blocking questions are complete, changed sources are rechecked, and research runs have finished. It is a research milestone, not the organisation's approval.";
+  "Readiness means the role's research passes the handover checks: responsibilities are described, evidence is accepted and valid, reviews and blocking questions are complete, and research runs have finished. It is a research milestone, not the organisation's approval.";
 const labels: Record<string, string> = {
   ...sharedLabels,
 };
@@ -195,12 +195,6 @@ function normaliseWebAddress(value: string) {
   } catch {
     return;
   }
-}
-/** A cited web page was refreshed and the quotation is gone; unreviewed since. */
-function sourceChanged(f: Finding) {
-  return (f.sourceChanges || []).some(
-    (c) => !c.quoteFound && (!f.reviewedAt || f.reviewedAt < c.at),
-  );
 }
 function Status({ value }: { value: string }) {
   return (
@@ -2835,11 +2829,6 @@ export function App({
                         <U.Badge variant="outline">{slotLabel(f.slot)}</U.Badge>
                       )}
                       <Status value={f.review} />
-                      {sourceChanged(f) && (
-                        <U.Badge variant="destructive">
-                          Source changed — re-review
-                        </U.Badge>
-                      )}
                       {f.citations.some((c) => c.unmatched) && (
                         <U.Badge variant="warning">
                           Check the source: quote not found word for word
@@ -3878,17 +3867,6 @@ export function App({
       {source && (
         <SourcePanel
           source={data?.sources.find((s) => s.id === source.id) || source}
-          onRefresh={async () => {
-            const result: RefreshResult = await post(
-              `/sources/${source.id}/refresh`,
-              {},
-            );
-            await reload();
-            // Superseding bumps this capture's version; the panel's own refresh
-            // is not a conflict, so carry the new version for a later save.
-            setSource({ ...source, version: source.version + 1 });
-            return result;
-          }}
           onClose={() => setSource(undefined)}
           onSave={async (v) => {
             await patch(`/sources/${source.id}`, {
@@ -3977,16 +3955,6 @@ function EvidencePanel({
           </U.SheetDescription>
         </U.SheetHeader>
         <div className="space-y-6 py-6">
-          {sourceChanged(f) && (
-            <U.Alert>
-              <U.AlertTitle>The cited page changed</U.AlertTitle>
-              <U.AlertDescription>
-                A newer capture no longer contains this exact quotation. Check
-                the passage against the new capture before saving a review; the
-                fact is marked for attention until it is checked again.
-              </U.AlertDescription>
-            </U.Alert>
-          )}
           {tableSlot ? (
             <FactFields
               slot={slot}
@@ -4254,24 +4222,14 @@ function EvidencePanel({
     </U.Sheet>
   );
 }
-interface RefreshResult {
-  source: Source;
-  previousId: string;
-  changed: boolean;
-  added: string[];
-  removed: string[];
-  affectedFindingIds: string[];
-}
 function SourcePanel({
   source: s,
   onClose,
   onSave,
-  onRefresh,
 }: {
   source: Source;
   onClose: () => void;
   onSave: (v: any) => Promise<void>;
-  onRefresh: () => Promise<RefreshResult>;
 }) {
   const [permission, setPermission] = useState(s.permission);
   const [caption, setCaption] = useState(s.caption || "");
@@ -4282,7 +4240,6 @@ function SourcePanel({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [image, setImage] = useState("");
-  const [refresh, setRefresh] = useState<RefreshResult>();
   const folderChanged = folderTouched && folder !== (s.folder || "auto");
   const rightsChanged = rightsTouched && rights !== (s.rights || "none");
   const dirty =
@@ -4291,8 +4248,6 @@ function SourcePanel({
     folderChanged ||
     rightsChanged;
   const closeGuard = useFormCloseGuard({ dirty, busy, onClose });
-  const diff =
-    refresh || (s.captureDiff ? { ...s.captureDiff, source: s } : undefined);
   useEffect(() => {
     if (s.kind !== "image") return;
     let url = "";
@@ -4383,83 +4338,9 @@ function SourcePanel({
             )}
           </div>
           {s.kind === "web" && s.url && (
-            <div className="space-y-3">
-              <div className="flex flex-wrap items-center gap-2">
-                {s.supersededBy ? (
-                  <U.Badge variant="outline">
-                    Superseded by a newer capture
-                  </U.Badge>
-                ) : (
-                  <U.Button
-                    variant="outline"
-                    size="sm"
-                    disabled={busy}
-                    onClick={() => {
-                      setBusy(true);
-                      setError("");
-                      onRefresh()
-                        .then(setRefresh)
-                        .catch((e) => setError(e.message))
-                        .finally(() => setBusy(false));
-                    }}
-                  >
-                    {busy ? "Refreshing…" : "Refresh capture"}
-                  </U.Button>
-                )}
-                {s.supersedes && (
-                  <U.Badge variant="outline">
-                    Refreshed from an earlier capture
-                  </U.Badge>
-                )}
-                <span className="text-p5 text-muted-foreground">
-                  Captured {new Date(s.retrievedAt).toLocaleString()}
-                </span>
-              </div>
-              {diff && (
-                <U.Alert>
-                  <U.AlertDescription>
-                    <p className="text-p4 font-medium">
-                      {diff.changed
-                        ? `${refresh ? "The page changed." : "This capture differs from the one it refreshed."} ${diff.affectedFindingIds.length} fact${diff.affectedFindingIds.length === 1 ? "" : "s"} cite${diff.affectedFindingIds.length === 1 ? "s" : ""} passages that no longer appear and ${diff.affectedFindingIds.length === 1 ? "was" : "were"} flagged for re-review.`
-                        : refresh
-                          ? "No text change since the previous capture. A new capture was recorded with today’s date."
-                          : "No text change against the capture this one refreshed."}
-                    </p>
-                    {refresh && (
-                      <p className="text-p5 mt-1">
-                        This capture is kept unchanged; existing quotations
-                        still refer to it. New facts should cite the new
-                        capture.
-                      </p>
-                    )}
-                    {diff.removed.length > 0 && (
-                      <div className="mt-3">
-                        <p className="text-label-3">
-                          Removed ({diff.removed.length})
-                        </p>
-                        {diff.removed.slice(0, 8).map((t, i) => (
-                          <p key={i} className="text-p5 line-through">
-                            {t}
-                          </p>
-                        ))}
-                      </div>
-                    )}
-                    {diff.added.length > 0 && (
-                      <div className="mt-3">
-                        <p className="text-label-3">
-                          Added ({diff.added.length})
-                        </p>
-                        {diff.added.slice(0, 8).map((t, i) => (
-                          <p key={i} className="text-p5">
-                            {t}
-                          </p>
-                        ))}
-                      </div>
-                    )}
-                  </U.AlertDescription>
-                </U.Alert>
-              )}
-            </div>
+            <p className="text-p5 text-muted-foreground">
+              Captured {new Date(s.retrievedAt).toLocaleString()}
+            </p>
           )}
           {s.error && (
             <U.Alert>
