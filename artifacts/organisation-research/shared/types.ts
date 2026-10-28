@@ -465,7 +465,8 @@ export interface ResearchJob extends Base {
   sourceIds?: string[];
   /** Also read the organisation's website; absent = crawl only when no sources were selected. */
   crawl?: boolean;
-  tier: "economy" | "power" | "max";
+  /** Runs before 28 Oct 2026 only: the retired research tier (plan P1.4). */
+  tier?: "economy" | "power" | "max";
   status:
     "queued" | "researching" | "completed" | "gaps" | "failed" | "cancelled";
   stage: string;

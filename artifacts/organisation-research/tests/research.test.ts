@@ -7,10 +7,9 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
-it("retains one successful Max run when the second provider fails, flagging unmatched quotations", async () => {
-  vi.stubEnv("MAX_CLAUDE_MODEL", "claude-test");
+it("keeps a run's supported facts, flagging unmatched quotations and excluding unusable sources", async () => {
+  vi.stubEnv("RESEARCH_MODEL", "claude-test");
   vi.stubEnv("ANTHROPIC_API_KEY", "test-key");
-  vi.stubEnv("MAX_OPENAI_MODEL", "gpt-test");
   const store = await Store.open();
   await store.init();
   const w = sampleWorkspace();
@@ -27,7 +26,6 @@ it("retains one successful Max run when the second provider fails, flagging unma
     ...base(),
     orgId: role.orgId,
     roleId: role.id,
-    tier: "max" as const,
     status: "researching" as const,
     stage: "Testing",
     errors: [],
@@ -143,10 +141,7 @@ it("retains one successful Max run when the second provider fails, flagging unma
     await processJob(store, job.id);
     const result = await store.read();
     expect(result.jobs[0].status).toBe("gaps");
-    expect(result.jobs[0].runs.map((r) => r.status).sort()).toEqual([
-      "completed",
-      "failed",
-    ]);
+    expect(result.jobs[0].runs.map((r) => r.status)).toEqual(["completed"]);
     expect(result.findings.some((f) => f.claim === "Valid new finding")).toBe(
       true,
     );
@@ -200,9 +195,8 @@ it("retains one successful Max run when the second provider fails, flagging unma
 });
 
 it("leaves role-scoped placements unplaced for organisation-wide runs", async () => {
-  vi.stubEnv("MAX_CLAUDE_MODEL", "claude-test");
+  vi.stubEnv("RESEARCH_MODEL", "claude-test");
   vi.stubEnv("ANTHROPIC_API_KEY", "test-key");
-  vi.stubEnv("MAX_OPENAI_MODEL", "gpt-test");
   const store = await Store.open();
   await store.init();
   const w = sampleWorkspace();
@@ -210,7 +204,6 @@ it("leaves role-scoped placements unplaced for organisation-wide runs", async ()
   const job = {
     ...base(),
     orgId: w.organisations[0].id,
-    tier: "max" as const,
     status: "researching" as const,
     stage: "Testing",
     errors: [],

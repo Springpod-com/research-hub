@@ -41,19 +41,17 @@ Configure Replit Secrets:
 | `BOOTSTRAP_ADMIN_EMAILS` | Verified primary email address(es) of the initial administrator(s); `BOOTSTRAP_ADMIN_IDS` (Clerk user IDs) also works. Remove after provisioning |
 | `AI_INTEGRATIONS_*` | Replit AI-integration proxy keys/base URLs for Gemini, Anthropic and OpenAI (managed by Replit) |
 | `REGISTRY_API_KEY` | This app's Springpod App Registry key (shown once at registration). Used only for the deploy heartbeat and feedback; see `docs/app-registry.md` |
-| `ECONOMY_MODEL`, `POWER_MODEL`, `MAX_CLAUDE_MODEL`, `MAX_OPENAI_MODEL` | Exact API model IDs, chosen by the owner. These are the defaults; an administrator can override each one from Team & settings (see below) |
+| `RESEARCH_MODEL` | The exact API model ID every research run uses, chosen by the owner. `POWER_MODEL` is read as a fallback until this is set. The economy, power and max tiers and the in-app model and prompt settings were retired on 28 Oct 2026 (plan P1.4) |
 | `UPLOAD_SCAN_COMMAND` | Production only: `scripts/clamav/scan-upload.sh` (in-project ClamAV; `CLAMAV_SIDECAR`, `CLAMAV_RUN_DIR`, `CLAMAV_DB_DIR` tune the sidecar) |
 | `OCCUPATION_DATA_DIR` | Optional. Directory of the bundled occupational datasets (defaults to `data/occupations`) |
 
 Model IDs deliberately have no guessed defaults. Choose exact IDs available to the provider account. The intended Max pairing is Fable + GPT-6 if available through those APIs. Verify both with a small live run before using real material. Models beginning `gemini` use Google, `claude` use Anthropic, and the remaining configured model uses OpenAI Responses.
 
-### Research connections and the research prompt
+### The research model and prompt
 
-**Team & settings** shows the four model positions behind the research tiers (Economy → Gemini, Power → Claude, Max → one Claude and one OpenAI analysis of the same captured sources), the model each one currently uses and where that value comes from (the environment variable, or an override saved in this workspace). Administrators can change a model: pick from the list of models the Replit AI integrations documented as available, or type any exact model ID. The provider prefix must match the position (a `gpt-…` ID cannot be saved for the Claude position), and the server sends one short live request to the chosen model before saving anything, so a mistyped or unavailable ID is refused rather than discovered during a research run. "Use environment default" removes the override. Every change is written to the audit log. Overrides live in the workspace record (`settings.models`); the environment variables remain the defaults for a new workspace.
+Every research run makes one analysis with the model named by `RESEARCH_MODEL` (plan P1.4, 28 Oct 2026). The model ID's prefix picks the provider: `gemini…` goes to Google, `claude…` to Anthropic, anything else to OpenAI Responses. Team & settings shows the model and whether its provider is connected; it is changed on the server, not in the app. The research instructions are kept in code (`INSTRUCTIONS` in `server/research.ts`), followed by the fixed output contract and the evidence.
 
-The same page shows the research prompt: the instructions every run sends before the evidence. Anyone can read them; administrators can edit them, save a new version or reset to the built-in default. The output contract (the JSON shape the worker parses) and the evidence framing are fixed and appended by the server, and are shown read-only below the editor. The prompt has a monotonic version (0 is the built-in default); each research run records the version it used (`promptVersion`), and a save is refused with 409 if someone else changed the prompt since the page was opened.
-
-Activity candidates are parked for now: the default prompt asks the models not to propose activities, the UI no longer shows the activities section, and readiness no longer requires an accepted activity. The data model, API routes and pack exports keep the field so existing packs remain valid.
+Retired with this change, with stored data kept: the Economy, Power and Max tiers, workspace model overrides, the editable and versioned prompt, and activity candidates (packs carry an empty `activities` list).
 
 ### Clerk SSO
 

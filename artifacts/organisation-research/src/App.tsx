@@ -44,7 +44,6 @@ import {
 import { ResearchWorkspacePage } from "./components/research-workspace-page";
 import * as U from "./ui";
 import { OrgSuggestions } from "./components/org-suggestions";
-import { ResearchSettings } from "./components/research-settings";
 import {
   OccupationMatcher,
   type OccupationRecord,
@@ -79,7 +78,7 @@ import { uploadFiles } from "./uploadBatch";
 import {
   ActiveRunBanner,
   RunCard,
-  TIER_NAME,
+  runLabel,
   isActive,
   scopeTitle,
 } from "./components/research-runs";
@@ -462,7 +461,7 @@ export function App({
 }) {
   const [data, setData] = useState<Data>();
   const [session, setSession] = useState<
-    Session & { providers: Record<string, boolean> }
+    Session & { research?: { ready: boolean; model: string | null } }
   >();
   const [error, setError] = useState("");
   const [route, setRoute] = useState(currentRoute);
@@ -1928,13 +1927,13 @@ export function App({
           sources={(data?.sources || []).filter(
             (x) => x.orgId === org!.id && x.text && !x.error,
           )}
-          tiers={session?.providers || {}}
+          ready={!!session?.research?.ready}
           initialRoleId={roleId === "all" ? undefined : roleId}
           initialSection={modal.item?.section}
           initialSourceIds={modal.item?.sourceIds}
           onClose={close}
-          onStart={async (tier, scopeRoleId, sections, sourceIds, crawl) => {
-            await startResearch(tier, scopeRoleId, sections, sourceIds, crawl);
+          onStart={async (scopeRoleId, sections, sourceIds, crawl) => {
+            await startResearch(scopeRoleId, sections, sourceIds, crawl);
           }}
         />
       );
@@ -2140,14 +2139,12 @@ export function App({
     </U.Button>
   );
   const startResearch = async (
-    tier: string,
     scopeRoleId?: string,
     sections?: Section[],
     sourceIds?: string[],
     crawl?: boolean,
   ) => {
     const job: ResearchJob = await post(`/organisations/${org!.id}/research`, {
-      tier,
       roleId: scopeRoleId,
       sections,
       sourceIds,
@@ -2203,7 +2200,7 @@ export function App({
     const lastRun = [...orgJobs].sort((x, y) =>
       y.updatedAt.localeCompare(x.updatedAt),
     )[0];
-    const runLabel: Record<string, string> = {
+    const runStatusLabel: Record<string, string> = {
       queued: "queued",
       researching: "in progress",
       completed: "completed",
@@ -2334,7 +2331,7 @@ export function App({
                 {detail(
                   "Last research run",
                   lastRun
-                    ? `${date(lastRun.updatedAt)} · ${runLabel[lastRun.status] || lastRun.status}`
+                    ? `${date(lastRun.updatedAt)} · ${runStatusLabel[lastRun.status] || lastRun.status}`
                     : "Not run yet",
                   !lastRun,
                 )}
@@ -2469,7 +2466,7 @@ export function App({
                       <summary className="cursor-pointer flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border px-4 py-3 group-open:mb-2">
                         <span className="text-p4">
                           {scopeTitle(j, orgRoles)} · {date(j.createdAt)} ·{" "}
-                          {TIER_NAME[j.tier]}
+                          {runLabel(j)}
                         </span>
                         <span className="flex items-center gap-3">
                           <Status value={j.status} />
@@ -2776,7 +2773,7 @@ export function App({
                     (researchRun) =>
                       [
                         researchRun.id,
-                        `${date(researchRun.createdAt)} · ${TIER_NAME[researchRun.tier]}`,
+                        `${date(researchRun.createdAt)} · ${runLabel(researchRun)}`,
                       ] as [string, string],
                   ),
                 ]}
@@ -3395,7 +3392,7 @@ export function App({
       {pageHeading(
         "Workspace",
         "Team & settings",
-        "Team access, research connections and research instructions. Access is managed independently from the wider platform.",
+        "Team access and the research model. Access is managed independently from the wider platform.",
       )}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <U.Card>
@@ -3468,11 +3465,23 @@ export function App({
             )}
           </U.CardContent>
         </U.Card>
-        <ResearchSettings
-          key={session?.userId}
-          session={session || null}
-          members={data?.members || []}
-        />
+        <U.Card>
+          <U.CardHeader>
+            <U.CardTitle>Research model</U.CardTitle>
+            <U.CardDescription>
+              Every research run makes one analysis with this model. It is set
+              on the server (RESEARCH_MODEL), not here.
+            </U.CardDescription>
+          </U.CardHeader>
+          <U.CardContent>
+            <p className="text-p3">
+              {session?.research?.model || "Not set"}
+              {session?.research?.model && !session.research.ready
+                ? " · its provider is not connected"
+                : ""}
+            </p>
+          </U.CardContent>
+        </U.Card>
       </div>
     </>
   );
@@ -3810,7 +3819,7 @@ export function App({
               <U.AlertDialogTitle>Cancel this research run?</U.AlertDialogTitle>
               <U.AlertDialogDescription>
                 {scopeTitle(cancelling, orgRoles)} ·{" "}
-                {TIER_NAME[cancelling.tier]}. Evidence already extracted is
+                {runLabel(cancelling)}. Evidence already extracted is
                 kept, but the run cannot be resumed; you can start a new one
                 later.
               </U.AlertDialogDescription>

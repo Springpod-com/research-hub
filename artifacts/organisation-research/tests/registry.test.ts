@@ -33,7 +33,9 @@ describe("app registry heartbeat", () => {
     const routes = routesOf(app);
     expect(routes).toContain("GET /api/health");
     expect(routes).toContain("POST /api/roles/:id/packs");
-    expect(routes.length).toBeGreaterThan(40);
+    // A floor proving routes are discovered, not a count of them: plan P1
+    // removes retired routes (40 remained on 28 Oct 2026).
+    expect(routes.length).toBeGreaterThan(25);
     expect(new Set(routes).size).toBe(routes.length);
   });
 

@@ -3,12 +3,9 @@ import type { ResearchJob, Role } from "../../shared/types";
 import * as U from "../ui";
 import { WhatsThis } from "./whats-this";
 
-export type Tier = ResearchJob["tier"];
-export const TIER_NAME: Record<Tier, string> = {
-  economy: "Economy",
-  power: "Power",
-  max: "Max",
-};
+/** The model a run used, e.g. "claude-sonnet-5" (one model per run since 28 Oct 2026). */
+export const runLabel = (j: ResearchJob) =>
+  [...new Set(j.runs.map((run) => run.model))].join(" and ") || "Research run";
 export const isActive = (j: ResearchJob) =>
   j.status === "queued" || j.status === "researching";
 const time = (s: string) => new Date(s).getTime();
@@ -44,13 +41,10 @@ export function elapsed(j: ResearchJob, now: number) {
   return (isActive(j) ? now : time(j.updatedAt)) - time(j.createdAt);
 }
 
-/** Median wall time of the last few finished runs of a tier, if any. */
-export function typicalDuration(jobs: ResearchJob[], tier: Tier) {
+/** Median wall time of the last few finished runs, if any. */
+export function typicalDuration(jobs: ResearchJob[]) {
   const times = jobs
-    .filter(
-      (j) =>
-        j.tier === tier && (j.status === "completed" || j.status === "gaps"),
-    )
+    .filter((j) => j.status === "completed" || j.status === "gaps")
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
     .slice(-5)
     .map((j) => time(j.updatedAt) - time(j.createdAt))
@@ -158,19 +152,8 @@ export function RunCard({
         <div className="min-w-0">
           <p className="text-p3 font-medium">{scopeTitle(j, roles)}</p>
           <p className="text-p5 text-muted-foreground">
-            {TIER_NAME[j.tier]} · started {when(j.createdAt)} ·{" "}
+            {runLabel(j)} · started {when(j.createdAt)} ·{" "}
             {active ? "running for" : "took"} {duration(elapsed(j, now))}
-            {j.promptVersion ? (
-              <>
-                {" "}
-                · research instructions v{j.promptVersion}{" "}
-                <WhatsThis term="research instructions version">
-                  The version of the written instructions the research assistant
-                  followed for this run. Team &amp; settings shows the current
-                  version.
-                </WhatsThis>
-              </>
-            ) : null}
           </p>
         </div>
         {badge}

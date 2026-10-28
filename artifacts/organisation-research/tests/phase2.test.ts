@@ -252,7 +252,6 @@ describe("Pack limitations", () => {
         ...base(),
         orgId: fixture.organisations[0].id,
         roleId: role().id,
-        tier: "economy",
         status: "completed",
         stage: "done",
         errors: ["Model call failed: simulated"],

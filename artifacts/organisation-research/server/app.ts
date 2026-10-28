@@ -68,25 +68,8 @@ import type {
   Workspace,
 } from "../shared/types.js";
 import { sectionNoteMaxLength, sections, slots } from "../shared/types.js";
-import {
-  providers,
-  providerAccess,
-  probeModel,
-  promptSettings,
-  DEFAULT_INSTRUCTIONS,
-  OUTPUT_CONTRACT,
-  CONTEXT_NOTE,
-} from "./research.js";
-import {
-  SLOTS,
-  CATALOGUE,
-  PROVIDER_LABEL,
-  MODEL_ID,
-  providerOf,
-  resolveModel,
-  slotProblem,
-  settingsOf,
-} from "./models.js";
+import { researchReady } from "./research.js";
+import { researchModel } from "./models.js";
 import { fetchPublic, extractPage } from "./retrieval.js";
 import { allowedOrigins } from "./origins.js";
 import {
@@ -470,7 +453,7 @@ export function createApp(store: Store, options: AppOptions = {}) {
       res.json({
         ...res.locals.member,
         demo: !!options.preview,
-        providers: providers(await store.read()),
+        research: { ready: researchReady(), model: researchModel().model ?? null },
       }),
     ),
   );
@@ -2000,7 +1983,6 @@ export function createApp(store: Store, options: AppOptions = {}) {
       const data = z
         .object({
           roleId: z.string().uuid().optional(),
-          tier: z.enum(["economy", "power", "max"]),
           sections: z
             .array(
               z.enum(
@@ -2053,10 +2035,10 @@ export function createApp(store: Store, options: AppOptions = {}) {
                   "Every selected source must be readable and belong to this organisation and role.",
                 );
             }
-          if (!providers(w)[data.tier])
+          if (!researchReady())
             throw new HttpError(
               503,
-              "The selected research tier is not configured. Check the provider keys and models under Research connections.",
+              "Research is not set up on this server. Set RESEARCH_MODEL to an exact model ID and connect its provider.",
             );
           const active = w.jobs.find(
             (j) =>
@@ -2191,146 +2173,6 @@ export function createApp(store: Store, options: AppOptions = {}) {
             if (!withdrawInvitation(w, m, String(req.params.id)))
               throw new HttpError(404, "That invitation no longer exists.");
             return { ok: true };
-          },
-          true,
-        ),
-      );
-    }),
-  );
-  // Research settings: which model each connection uses and the editable
-  // research instructions. Everyone can read them; administrators change them.
-  const settingsView = (w: Workspace) => ({
-    slots: SLOTS.map((info) => {
-      const resolved = resolveModel(w, info.slot);
-      return {
-        ...info,
-        providerLabel: PROVIDER_LABEL[info.provider],
-        model: resolved.model ?? null,
-        source: resolved.source,
-        problem: resolved.problem ?? null,
-        environmentModel: process.env[info.envVar]?.trim() || null,
-        access: !!providerAccess(info.provider),
-        options: CATALOGUE[info.provider],
-      };
-    }),
-    tiers: providers(w),
-    prompt: promptSettings(w),
-    defaultInstructions: DEFAULT_INSTRUCTIONS,
-    contract: OUTPUT_CONTRACT,
-    contextNote: CONTEXT_NOTE,
-  });
-  app.get(
-    "/api/research-settings",
-    handler(async (_req, res) => res.json(settingsView(await store.read()))),
-  );
-  app.put(
-    "/api/research-settings/models/:slot",
-    handler(async (req, res) => {
-      const info = SLOTS.find((s) => s.slot === req.params.slot);
-      if (!info) throw new HttpError(404, "Unknown research connection.");
-      const { model } = z
-        .object({ model: z.string().trim().max(100) })
-        .parse(req.body);
-      if ((res.locals.member as Member).role !== "admin")
-        throw new HttpError(403, "Administrator access required.");
-      if (model) {
-        if (!MODEL_ID.test(model))
-          throw new HttpError(422, "Enter a model ID such as claude-sonnet-5.");
-        if (providerOf(model) !== info.provider)
-          throw new HttpError(
-            422,
-            `${info.label} runs on ${PROVIDER_LABEL[info.provider]}; "${model}" would be sent to ${PROVIDER_LABEL[providerOf(model)]}.`,
-          );
-        if (!providerAccess(info.provider))
-          throw new HttpError(
-            422,
-            `No ${PROVIDER_LABEL[info.provider]} connection is configured on the server, so the model cannot be verified.`,
-          );
-        // Verified live before anything is stored: a saved model must answer.
-        try {
-          await probeModel(model);
-        } catch (e) {
-          throw new HttpError(
-            422,
-            `"${model}" did not answer through the ${PROVIDER_LABEL[info.provider]} connection: ${(e as Error).message}`,
-          );
-        }
-      } else {
-        const env = process.env[info.envVar]?.trim();
-        if (!env)
-          throw new HttpError(
-            422,
-            `There is no environment default for ${info.label}; choose a model instead.`,
-          );
-        const problem = slotProblem(info, env);
-        if (problem) throw new HttpError(422, problem);
-      }
-      res.json(
-        await mutate(
-          req,
-          res,
-          (w, m) => {
-            const settings = settingsOf(w);
-            const before = resolveModel(w, info.slot).model ?? "none";
-            if (model) settings.models[info.slot] = model;
-            else delete settings.models[info.slot];
-            const after = resolveModel(w, info.slot).model ?? "none";
-            audit(
-              w,
-              m.userId,
-              `Research model changed for ${info.label}: ${before} → ${after}${model ? " (verified with a live request)" : " (environment default)"}`,
-              info.slot,
-            );
-            return settingsView(w);
-          },
-          true,
-        ),
-      );
-    }),
-  );
-  app.put(
-    "/api/research-settings/prompt",
-    handler(async (req, res) => {
-      const data = z
-        .object({
-          instructions: z.string().max(20000).optional(),
-          reset: z.boolean().optional(),
-          version: z.number().int().nonnegative(),
-        })
-        .parse(req.body);
-      const instructions = data.reset
-        ? DEFAULT_INSTRUCTIONS
-        : (data.instructions ?? "").replace(/\r\n/g, "\n").trim();
-      if (!instructions)
-        throw new HttpError(422, "The research instructions cannot be empty.");
-      res.json(
-        await mutate(
-          req,
-          res,
-          (w, m) => {
-            const current = promptSettings(w);
-            if (current.version !== data.version)
-              throw new HttpError(
-                409,
-                "The research prompt changed since you opened it. Reload and review the current version before saving.",
-              );
-            if (instructions === current.instructions)
-              throw new HttpError(422, "Nothing changed in the instructions.");
-            settingsOf(w).prompt = {
-              instructions,
-              version: current.version + 1,
-              updatedAt: now(),
-              updatedBy: m.userId,
-            };
-            audit(
-              w,
-              m.userId,
-              data.reset
-                ? `Research prompt reset to the built-in default (version ${current.version + 1})`
-                : `Research prompt updated (version ${current.version + 1})`,
-              "research-prompt",
-            );
-            return settingsView(w);
           },
           true,
         ),

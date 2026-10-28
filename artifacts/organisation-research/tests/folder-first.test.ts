@@ -184,7 +184,7 @@ describe("folder-first research", () => {
       createApp(store, { testMember: researcher }),
     )
       .post(`/api/organisations/${organisation.id}/research`)
-      .send({ tier: "economy", sections: ["role"] });
+      .send({ sections: ["role"] });
     expect(withoutRole.status).toBe(422);
     expect(withoutRole.body.error).toContain("requires a role");
 
@@ -192,7 +192,7 @@ describe("folder-first research", () => {
       createApp(store, { testMember: researcher }),
     )
       .post(`/api/organisations/${organisation.id}/research`)
-      .send({ tier: "economy", sections: ["brand"] });
+      .send({ sections: ["brand"] });
     expect(gathering.status).toBe(422);
     expect(gathering.body.error).toContain("at least one readable source");
   });
