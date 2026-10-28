@@ -20,7 +20,8 @@ How this changes the rest of the document:
 
 - **Occupations: keep, attached automatically.** Section 3 said drop; that no longer stands. Since 27 October, a pack made for a role with no recorded match carries the best UK SOC and the best O*NET match with their task statements, marked proposed. A researcher's own match for a scheme always wins. The matches go into the snapshot only; the role record is unchanged. Studio reads them and offers the tasks to the WORK day plan draft as suggestions, never as organisation facts.
 - **ClamAV: keep.** Section 3's decision row is settled.
-- **Step 10 is now the migration** of pack building into Studio, after steps 0 to 8. It replaces "Studio pulls packs by API".
+- **Step 11 is now the migration** of pack building into Studio, after steps 0 to 9. It replaces "Studio pulls packs by API".
+- **Several roles at once (28 October).** Setting up an organisation can take several roles in one go, and one Generate researches the organisation once and each role in parallel, giving one pack per role. This is step 8.
 - Decisions 6 and 7 of section 6 are answered by the above; brand and media (7) was not asked and stays open.
 
 ---
@@ -163,11 +164,11 @@ Line counts are from today's source.
 
 ### Proposed
 
-1. **New pack.** Organisation name and website; role title and location; paste the job advert or responsibilities.
+1. **New pack.** Organisation name and website, then one or more roles: for each, a title, a location, and the job advert or responsibilities pasted in. A role can also be added to an existing organisation later.
 2. **Drop material.** One drop zone for files or a ZIP of any layout, plus the website crawl, which is on by default. Sources are sorted into sections automatically. No per-item forms.
-3. **Generate.** One button. The server runs every section in parallel and reports one progress bar. Facts keep their source id. A quote that cannot be matched is shown with a flag instead of being dropped. Every empty place the next Studio stage needs becomes a question or a "to confirm" line.
-4. **Review.** One page grouped by section. Each fact has keep or exclude, edit, and a source link. Gaps and questions sit beside it. Add a fact or a client answer by hand.
-5. **Export.** `knowledge-base.json` (the same 2.x contract) plus one Markdown file for people to read. Later, optionally, a "Send to Studio" button or a Studio "Import from Organisation Research" picker instead of download and upload.
+3. **Generate.** One button. The server researches the organisation sections once and the role sections for every role, all in parallel, and reports one progress bar. Facts keep their source id. A quote that cannot be matched is shown with a flag instead of being dropped. Every empty place the next Studio stage needs becomes a question or a "to confirm" line.
+4. **Review.** One page grouped by section, with the organisation facts reviewed once and a tab for each role. Each fact has keep or exclude, edit, and a source link. Gaps and questions sit beside it. Add a fact or a client answer by hand.
+5. **Export.** One `knowledge-base.json` per role (the same 2.x contract, since Studio takes one pack per experience) plus one Markdown file each for people to read. Later, optionally, a "Send to Studio" button or a Studio "Import from Organisation Research" picker instead of download and upload.
 
 That takes the flow from seven stages and dozens of actions to five stages and about six actions. Generate quality goes up because nothing useful is thrown away by the verbatim-quote gate. The designer still sees which facts are unconfirmed.
 
@@ -193,9 +194,10 @@ Each step is its own task. Each one is behaviour-preserving for Studio and has i
 | 5 | One Generate: parallel sections, one progress view | Marriott pack from one click |
 | 6 | One-drop upload with automatic sorting; accept SVG and WebP; raise the PDF limit | The Marriott material uploads in one action |
 | 7 | One review page; shorter organisation and role forms; drop brand and media extraction | A new pack takes about six actions |
-| 8 | Exports: JSON plus Markdown only | Studio imports it; no DOCX or folder ZIP |
-| 9 | Re-cut slots around Studio's six lessons and the WORK day plan (progression, rewards, entry routes, tools) | Studio's LEARN Generate and day plan cite more facts from a fresh pack |
-| 10 | Migrate pack building into Studio (decided 27 October) | Needs its own plan and a Studio decision record; Studio's CLAUDE.md currently names this app as the schema owner |
+| 8 | Several roles at once: the organisation set-up takes one or more roles (title, location, optional advert); Generate researches the organisation once and each role in parallel; review has a tab per role; occupations are matched per role (decided 28 October) | An organisation set up with three roles gives three packs from one Generate; each imports into Studio; the organisation sections are researched once, not three times |
+| 9 | Exports: JSON plus Markdown only | Studio imports it; no DOCX or folder ZIP |
+| 10 | Re-cut slots around Studio's six lessons and the WORK day plan (progression, rewards, entry routes, tools) | Studio's LEARN Generate and day plan cite more facts from a fresh pack |
+| 11 | Migrate pack building into Studio (decided 27 October) | Needs its own plan and a Studio decision record; Studio's CLAUDE.md currently names this app as the schema owner |
 
 ---
 
@@ -208,7 +210,7 @@ These are product rules written into `replit.md` and `docs/REPLIT-HANDOVER.md`. 
 3. **Occupational data (UK SOC and O*NET) with full provenance.** Drop it, given that Studio never reads it and has its own SOC map?
 4. **Readiness and the reviewer "ready" gate.** Make them advisory or remove them, given that Studio accepts drafts?
 5. **"No automated Studio delivery."** Allow a "Send to Studio" or "Import from Organisation Research" path later?
-6. **Separate app or part of Studio?** Studio already has Clerk, object storage, AI drafting with long-running runs, and a research pack table per experience. Moving pack building into Studio's Set up step would remove a whole deployment (Clerk app, Postgres, VM, ClamAV). It is a larger change, and Studio's CLAUDE.md currently treats this app as the schema owner. My recommendation is to slim this app first (steps 0 to 8), then decide.
+6. **Separate app or part of Studio?** Studio already has Clerk, object storage, AI drafting with long-running runs, and a research pack table per experience. Moving pack building into Studio's Set up step would remove a whole deployment (Clerk app, Postgres, VM, ClamAV). It is a larger change, and Studio's CLAUDE.md currently treats this app as the schema owner. My recommendation is to slim this app first (steps 0 to 9), then decide.
 7. **Brand and media sections.** Drop them from the pack, given that Studio handles branding and media itself?
 
 ---
