@@ -2840,6 +2840,11 @@ export function App({
                           Source changed — re-review
                         </U.Badge>
                       )}
+                      {f.citations.some((c) => c.unmatched) && (
+                        <U.Badge variant="warning">
+                          Check the source: quote not found word for word
+                        </U.Badge>
+                      )}
                       {f.runIds.length > 1 && (
                         <U.Badge variant="outline">
                           Found in {f.runIds.length} runs
@@ -4063,6 +4068,11 @@ function EvidencePanel({
                     <blockquote className="border-l-2 border-brand-teal pl-4 text-p3 whitespace-pre-wrap">
                       “{c.quote}”
                     </blockquote>
+                    {c.unmatched && (
+                      <U.Badge variant="warning">
+                        Not found word for word in this source. Check the source says this.
+                      </U.Badge>
+                    )}
                     {s?.url && (
                       <a
                         href={s.url}

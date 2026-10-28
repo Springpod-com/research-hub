@@ -384,6 +384,12 @@ export interface Citation {
   sourceId: string;
   quote: string;
   locator: string;
+  /**
+   * Set by the server when the quote was not found word for word in its
+   * source. The fact is kept and flagged for a check rather than refused
+   * (Ollie, 27 Oct 2026: quotations are flagged, not enforced).
+   */
+  unmatched?: boolean;
 }
 export interface Finding extends Base {
   orgId: string;

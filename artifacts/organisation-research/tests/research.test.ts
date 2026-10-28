@@ -7,7 +7,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
-it("retains one successful Max run when the second provider fails, excluding invented quotations", async () => {
+it("retains one successful Max run when the second provider fails, flagging unmatched quotations", async () => {
   vi.stubEnv("MAX_CLAUDE_MODEL", "claude-test");
   vi.stubEnv("ANTHROPIC_API_KEY", "test-key");
   vi.stubEnv("MAX_OPENAI_MODEL", "gpt-test");
@@ -60,6 +60,18 @@ it("retains one successful Max run when the second provider fails, excluding inv
           {
             sourceId: source.id,
             quote: "These words do not exist.",
+            locator: "Paragraph 1",
+          },
+        ],
+        rationale: "Test",
+      },
+      {
+        claim: "Cites a source that does not exist",
+        kind: "company",
+        citations: [
+          {
+            sourceId: "00000000-0000-4000-8000-000000000000",
+            quote: "Anything.",
             locator: "Paragraph 1",
           },
         ],
@@ -144,8 +156,18 @@ it("retains one successful Max run when the second provider fails, excluding inv
     ).toBe(
       "Coordinators record quantity differences and prepare a handover for the next shift.",
     );
-    expect(result.findings.some((f) => f.claim === "Invented claim")).toBe(
-      false,
+    const invented = result.findings.find((f) => f.claim === "Invented claim");
+    expect(invented?.citations[0].unmatched).toBe(true);
+    expect(invented?.citations[0].quote).toBe("These words do not exist.");
+    expect(
+      result.findings.find((f) => f.claim === "Valid new finding")?.citations[0]
+        .unmatched,
+    ).toBeUndefined();
+    expect(
+      result.findings.some((f) => f.claim === "Cites a source that does not exist"),
+    ).toBe(false);
+    expect(result.jobs[0].errors).toContain(
+      "1 fact was kept with a quote not found word for word in its source; check it against the source.",
     );
     const retained = result.findings.find((f) => f.claim === "Keep this claim");
     expect(retained?.slot).toBe("role.duty");

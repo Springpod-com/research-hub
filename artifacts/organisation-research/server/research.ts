@@ -18,6 +18,7 @@ import {
 } from "./quotation.js";
 import { fetchPublic, extractPage } from "./retrieval.js";
 import type {
+  Citation,
   ModelSlot,
   Source,
   ResearchJob,
@@ -481,6 +482,7 @@ export async function processJob(store: Store, id: string) {
             const findingIds: string[] = [];
             const quotationIndexes = new Map<string, QuotationIndex>();
             let accepted = 0;
+            let flagged = 0;
             for (const f of result.data.findings) {
               try {
                 for (const citation of f.citations) {
@@ -497,9 +499,8 @@ export async function processJob(store: Store, id: string) {
                   const exact = quotationIndex
                     ? locateQuotation(quotationIndex, citation.quote)
                     : null;
-                  if (exact === null)
-                    throw new Error("Quotation was not found in its source.");
-                  citation.quote = exact;
+                  // A quote not found word for word is kept; validateCitations flags it.
+                  if (exact !== null) citation.quote = exact;
                 }
                 validateCitations(
                   state.sources,
@@ -582,6 +583,7 @@ export async function processJob(store: Store, id: string) {
                   findingIds.push(item.id);
                 }
                 accepted++;
+                if ((f.citations as Citation[]).some((citation) => citation.unmatched)) flagged++;
               } catch {
                 findingIds.push("");
                 j.errors.push(
@@ -589,6 +591,10 @@ export async function processJob(store: Store, id: string) {
                 );
               }
             }
+            if (flagged)
+              j.errors.push(
+                `${flagged} ${flagged === 1 ? "fact was" : "facts were"} kept with a quote not found word for word in its source; check ${flagged === 1 ? "it" : "them"} against the source.`,
+              );
             for (const q of result.data.questions) {
               if (
                 !state.questions.some(

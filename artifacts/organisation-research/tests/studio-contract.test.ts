@@ -66,6 +66,30 @@ describe("Studio import contract", () => {
     expect(inZip.success ? [] : inZip.error.issues).toEqual([]);
   });
 
+  it("names facts kept with an unmatched quote in the pack's limitations", async () => {
+    const source = fixture.sources.find((s) => s.text.trim())!;
+    const flagged = await request(app())
+      .post(`/api/organisations/${fixture.organisations[0].id}/findings`)
+      .send({
+        claim: "A paraphrase the source does not contain",
+        kind: "company",
+        roleId: fixture.roles[0].id,
+        citations: [{ sourceId: source.id, quote: "Words nowhere in the source.", locator: "p1" }],
+      });
+    expect(flagged.status).toBe(201);
+    const pack = await request(app())
+      .post(`/api/roles/${fixture.roles[0].id}/packs`)
+      .send({});
+    const row = pack.body.register.find(
+      (r: { findingId: string }) => r.findingId === flagged.body.id,
+    );
+    expect(row).toBeDefined();
+    expect(pack.body.limitations).toContain(
+      `Fact #${row.n} cites a passage not found word for word in the source. Check before relying on it.`,
+    );
+    expect(knowledgeBaseSchema.safeParse(pack.body).success).toBe(true);
+  });
+
   it("is a real check: Studio refuses a null where it expects text", async () => {
     const pack = await request(app())
       .post(`/api/roles/${fixture.roles[0].id}/packs`)

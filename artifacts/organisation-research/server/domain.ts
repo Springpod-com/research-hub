@@ -296,11 +296,9 @@ export function validateCitations(
       quotationIndex = buildQuotationIndex(s.text);
       quotationIndexes.set(s.id, quotationIndex);
     }
-    if (locateQuotation(quotationIndex, c.quote) === null)
-      throw new HttpError(
-        422,
-        `The passage was not found in “${shortTitle(s)}”. Copy it word for word from the source’s captured text; line breaks and spacing do not matter.`,
-      );
+    // Flag, don't refuse: the fact keeps its source and is marked for a check.
+    if (locateQuotation(quotationIndex, c.quote) === null) c.unmatched = true;
+    else delete c.unmatched;
     if (kind === "company" && s.kind === "occupation")
       throw new HttpError(
         422,
@@ -1252,6 +1250,7 @@ export function makePack(
     ),
     limitations: [
       ...issues,
+      ...unmatchedLimitation(register, findings),
       ...sources.filter((s) => s.error).map((s) => `${s.title}: ${s.error}`),
       ...w.jobs
         .filter((j) => j.orgId === orgId && (!j.roleId || j.roleId === roleId))
@@ -1275,6 +1274,22 @@ export function makePack(
   };
   const parsed = packSchema.parse(pack);
   return structuredClone(parsed) as unknown as Pack;
+}
+/** Facts kept with a quote not found word for word, named by register number. */
+function unmatchedLimitation(
+  register: { n: number; findingId: string }[],
+  findings: Pick<Finding, "id" | "citations">[],
+): string[] {
+  const flagged = new Set(
+    findings
+      .filter((f) => f.citations.some((c) => c.unmatched))
+      .map((f) => f.id),
+  );
+  const numbers = register.filter((row) => flagged.has(row.findingId)).map((row) => `#${row.n}`);
+  if (!numbers.length) return [];
+  return [
+    `${numbers.length === 1 ? "Fact" : "Facts"} ${numbers.join(", ")} ${numbers.length === 1 ? "cites a passage" : "cite passages"} not found word for word in the source. Check before relying on ${numbers.length === 1 ? "it" : "them"}.`,
+  ];
 }
 const heading = (v: string) => v.replace(/[\r\n]/g, " ");
 export function packMarkdown(p: Pack): string {

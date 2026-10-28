@@ -44,19 +44,24 @@ describe("Evidence and immutable pack workflow", () => {
       .send({});
     expect(r.status).toBe(403);
   });
-  it("requires an exact source quotation and the same organisation", async () => {
+  it("flags a quotation the source does not contain and requires the same organisation", async () => {
     const f = fixture.findings[0];
     const route = `/api/organisations/${f.orgId}/findings`;
+    const madeUp = await request(app())
+      .post(route)
+      .send({
+        ...f,
+        citations: [{ ...f.citations[0], quote: "Made up passage" }],
+      });
+    expect(madeUp.status).toBe(201);
+    expect(madeUp.body.citations[0].unmatched).toBe(true);
     expect(
       (
         await request(app())
-          .post(route)
-          .send({
-            ...f,
-            citations: [{ ...f.citations[0], quote: "Made up passage" }],
-          })
+          .patch(`/api/findings/${madeUp.body.id}`)
+          .send({ ...madeUp.body, review: "rejected" })
       ).status,
-    ).toBe(422);
+    ).toBe(200);
     expect(
       (
         await request(app())
@@ -132,8 +137,16 @@ describe("Evidence and immutable pack workflow", () => {
           },
         ],
       });
-    expect(wrongWords.status).toBe(422);
-    expect(wrongWords.body.error).toContain("was not found in");
+    // Flagged, not refused (Ollie, 27 Oct 2026).
+    expect(wrongWords.status).toBe(201);
+    expect(wrongWords.body.citations[0].unmatched).toBe(true);
+    expect(
+      (
+        await request(app())
+          .patch(`/api/findings/${wrongWords.body.id}`)
+          .send({ ...wrongWords.body, review: "rejected" })
+      ).status,
+    ).toBe(200);
   });
   it("validates replacement citations and invented measurement citations", async () => {
     const current = (await request(app()).get("/api/workspace")).body;
