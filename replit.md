@@ -36,6 +36,7 @@ Owner-provided values (see README table): Replit-managed Clerk keys (`CLERK_PUBL
 - Dev keeps the API on a fixed private port (3001) because the workflow's `PORT` belongs to Vite; production runs a single process on `PORT` serving frontend + API from one origin.
 - Deployment target is Reserved VM (`deploymentTarget = "vm"` in `.replit`) because the research worker is embedded in the web process and must stay running.
 - Template `api-server` and `lib/*` packages were removed: the app owns `/api` itself and the shared OpenAPI/Drizzle libs were unused.
+- The template `mockup-sandbox` artifact and the `@workspace/scripts` package (only a hello script) were removed on 28 Oct 2026 (plan P1.1); `scripts/post-merge.sh` stays because `.replit` runs it.
 - Occupational reference data is bundled, versioned JSON (UK SOC 2020 primary, O*NET supplementary) loaded in memory by `server/occupations.ts`; matching is deterministic keyword retrieval with the matched terms as rationale. No live API, no model, no DB schema for it.
 - Approval is simplified: evidence-backed facts are registered by default and
   may only be excluded or restored; folders move automatically from gathering
